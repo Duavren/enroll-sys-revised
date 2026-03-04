@@ -1,0 +1,32 @@
+[
+  {
+    "id": "1772604871360",
+    "studentId": 1,
+    "enrollmentId": "1",
+    "installmentNumber": 1,
+    "amount": 7680,
+    "method": "Cash",
+    "reference": "12312321321312",
+    "ts": "2026-03-04T06:14:31.360Z"
+  },
+  {
+    "id": "1772604509109",
+    "studentId": "2024-001234",
+    "enrollmentId": "1",
+    "installmentNumber": 1,
+    "amount": 7680,
+    "method": "Cash",
+    "reference": "asdsaassa",
+    "ts": "2026-03-04T06:08:29.109Z"
+  },
+  {
+    "id": "1772603884105",
+    "studentId": "2024-001234",
+    "enrollmentId": "1",
+    "installmentNumber": 1,
+    "amount": 7680,
+    "method": "Online Payment",
+    "reference": " 1232131",
+    "ts": "2026-03-04T05:58:04.105Z"
+  }
+]

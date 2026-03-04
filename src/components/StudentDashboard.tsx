@@ -1,0 +1,2712 @@
+import React, { useState, useEffect } from 'react';
+import { Button } from './ui/button';
+import { 
+  User, 
+  LogOut, 
+  LayoutDashboard, 
+  ClipboardCheck, 
+  BookOpen,
+  Calendar as CalendarIcon,
+  UserCircle,
+  GraduationCap,
+  Clock,
+  CheckCircle2,
+  Upload,
+  Download,
+  Check,
+  AlertCircle,
+  Bell,
+  Loader2
+} from 'lucide-react';
+import { enrollmentService } from '../services/enrollment.service';
+import { studentService } from '../services/student.service';
+import { subjectService } from '../services/subject.service';
+import paymentsService from '../services/payments.service';
+import { gradesService } from '../services/grades.service';
+import { Card } from './ui/card';
+import { Badge } from './ui/badge';
+import { Input } from './ui/input';
+import { Label } from './ui/label';
+import { Checkbox } from './ui/checkbox';
+import { DocumentUpload } from './ui/document-upload';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from './ui/dialog';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from './ui/select';
+import { Alert, AlertDescription, AlertTitle } from './ui/alert';
+
+interface StudentDashboardProps {
+  onLogout: () => void;
+}
+export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
+  const [activeSection, setActiveSection] = useState('Dashboard');
+  const [date, setDate] = useState<Date | undefined>(new Date());
+  const [studentType, setStudentType] = useState<string>('');
+  const [enrollmentStep, setEnrollmentStep] = useState(1);
+  const [selectedSubjects, setSelectedSubjects] = useState<string[]>([]);
+  const [activeTab, setActiveTab] = useState('basic-info');
+  const [enrollmentStatus, setEnrollmentStatus] = useState<string>('none');
+  const [hasNewNotification, setHasNewNotification] = useState(false);
+  const [showNotification, setShowNotification] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [currentEnrollment, setCurrentEnrollment] = useState<any>(null);
+  const [enrollments, setEnrollments] = useState<any[]>([]);
+  const [currentCourses, setCurrentCourses] = useState<any[]>([]);
+  const [schedule, setSchedule] = useState<any[]>([]);
+  const [availableSubjects, setAvailableSubjects] = useState<any[]>([]);
+  const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
+  const [scheduleOptions, setScheduleOptions] = useState<any[]>([]);
+  const [selectedScheduleForAdd, setSelectedScheduleForAdd] = useState<number | null>(null);
+  const [schedulingSubject, setSchedulingSubject] = useState<any>(null);
+  const [studentProfile, setStudentProfile] = useState<any>(null);
+  const [enrollmentDetails, setEnrollmentDetails] = useState<any>(null);
+  const [assessmentOpen, setAssessmentOpen] = useState(false);
+  const [loadingAssessment, setLoadingAssessment] = useState(false);
+  const [paymentsOpen, setPaymentsOpen] = useState(false);
+  const [paymentHistory, setPaymentHistory] = useState<any[]>([]);
+  const [assessmentData, setAssessmentData] = useState<any>(null);
+  const [notifications, setNotifications] = useState<any[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [uploadedDocuments, setUploadedDocuments] = useState<Record<string, File>>({});
+  const [schoolYear, setSchoolYear] = useState('2024-2025');
+  const [semester, setSemester] = useState('1st Semester');
+  const [installmentPaymentOpen, setInstallmentPaymentOpen] = useState(false);
+  const [selectedInstallmentPeriod, setSelectedInstallmentPeriod] = useState<string | null>(null);
+  const [profileForm, setProfileForm] = useState({
+    first_name: '',
+    middle_name: '',
+    last_name: '',
+    suffix: '',
+    contact_number: '',
+    address: '',
+    birth_date: '',
+    gender: '',
+    username: ''
+  });
+  const [passwordForm, setPasswordForm] = useState({
+    newPassword: '',
+    confirmPassword: ''
+  });
+  const [grades, setGrades] = useState<any[]>([]);
+  const [loadingGrades, setLoadingGrades] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
+  const [scholarshipType, setScholarshipType] = useState<string>('None');
+  const [scholarshipLetter, setScholarshipLetter] = useState<File | null>(null);
+  const [installmentSchedule, setInstallmentSchedule] = useState<any[]>([]);
+  const [loadingSchedule, setLoadingSchedule] = useState(false);
+
+  const SCHOLAR_TYPES = [
+    'None',
+    'Merit Scholarship',
+    'Academic Scholarship',
+    'Financial Assistance Scholarship',
+    'Working Student Scholarship',
+    'Partnership Scholarships',
+    'Promotional Scholarship Grants'
+  ];
+
+  const normalizeStudentType = (raw?: string) => {
+    if (!raw) return '';
+    const typeMap: Record<string, string> = {
+      New: 'new',
+      Transferee: 'transferee',
+      Returning: 'returning',
+      Continuing: 'continuing',
+      Scholar: 'scholar',
+      new: 'new',
+      transferee: 'transferee',
+      returning: 'returning',
+      continuing: 'continuing',
+      scholar: 'scholar'
+    };
+    return typeMap[raw] || raw.toLowerCase();
+  };
+
+  const getDocDownloadUrl = (docType: string) => `/uploads/documents/${docType}.pdf`;
+
+  const getOrdinalSuffix = (n: number) => {
+    if (!n && n !== 0) return '';
+    const v = n % 100;
+    if (v >= 11 && v <= 13) return 'th';
+    switch (n % 10) {
+      case 1:
+        return 'st';
+      case 2:
+        return 'nd';
+      case 3:
+        return 'rd';
+      default:
+        return 'th';
+    }
+  };
+
+  const rebuildNotifications = (status: string, assessment: any, payments: any[], enrollment: any) => {
+    const notices: any[] = [];
+    if (status && status !== 'none') {
+      notices.push({
+        title: 'Enrollment Status',
+        detail: `Current status: ${status}`,
+        action: status.includes('Payment') ? 'View payments' : undefined,
+        actionType: 'payments'
+      });
+    }
+
+    const total = assessment?.total_amount || assessment?.total || enrollment?.total_amount || 0;
+    const paid = payments.reduce((sum: number, p: any) => sum + (p.amount || 0), 0);
+    const balance = Math.max(total - paid, 0);
+
+    if (balance > 0) {
+      notices.push({
+        title: 'Outstanding Balance',
+        detail: `₱${balance.toLocaleString('en-US', { minimumFractionDigits: 2 })} remaining.`,
+        action: 'Review payments',
+        actionType: 'payments'
+      });
+    }
+
+    if (enrollment?.section) {
+      notices.push({
+        title: 'Section Placement',
+        detail: `You are tagged under ${enrollment.section}.`,
+        action: 'View schedule',
+        actionType: 'schedule'
+      });
+    }
+
+    setNotifications(notices);
+    setHasNewNotification(notices.length > 0);
+  };
+
+  useEffect(() => {
+    fetchStudentData();
+    // poll for updates every 30s (notifications and enrollment status)
+    const poll = setInterval(() => {
+      fetchNotifications();
+      fetchStudentData();
+    }, 30000);
+    fetchNotifications();
+    return () => clearInterval(poll);
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const loadGrades = async () => {
+      if (activeSection !== 'Grades') return;
+      try {
+        setLoadingGrades(true);
+        const sid = studentProfile?.student_id;
+        if (!sid) return;
+        const resp = await gradesService.getStudentGrades(sid.toString());
+        if (!mounted) return;
+        setGrades(resp?.data || resp || []);
+      } catch (err) {
+        console.error('Failed to load grades', err);
+        setGrades([]);
+      } finally {
+        if (mounted) setLoadingGrades(false);
+      }
+    };
+    loadGrades();
+    return () => { mounted = false; };
+  }, [activeSection, studentProfile]);
+
+  const resolvedStudentType = normalizeStudentType(
+    studentProfile?.student_type || enrollmentDetails?.student_type || currentEnrollment?.student_type
+  );
+
+  useEffect(() => {
+    if (!studentType && resolvedStudentType) {
+      setStudentType(resolvedStudentType);
+      setEnrollmentStep((prev) => (prev < 2 ? 2 : prev));
+    }
+  }, [resolvedStudentType, studentType]);
+
+  useEffect(() => {
+    let mounted = true;
+    const calculateRemainingBalance = async () => {
+      if (!currentEnrollment?.id) {
+        setInstallmentSchedule([]);
+        return;
+      }
+      try {
+        setLoadingSchedule(true);
+        // Fetch actual payment records
+        const resp = await studentService.getInstallmentSchedule(currentEnrollment.id);
+        if (mounted) {
+          const payments = resp?.data || [];
+          // Get the down payment
+          const downPayment = payments.find((p: any) => p.period === 'Down Payment');
+          
+          if (downPayment && currentEnrollment?.total_amount) {
+            const totalAmount = currentEnrollment.total_amount;
+            const monthlyAmount = totalAmount / 4;
+            
+            // Define remaining period names
+            const remainingPeriodNames = ['Prelim Period', 'Midterm Period', 'Finals Period'];
+            
+            // Build remaining periods, checking if they exist in database
+            const remainingPeriods = remainingPeriodNames.map(periodName => {
+              const existingPayment = payments.find((p: any) => p.period === periodName);
+              
+              if (existingPayment) {
+                // Payment already submitted, show actual status
+                return {
+                  period: periodName,
+                  amount: existingPayment.amount,
+                  status: existingPayment.status,
+                  id: existingPayment.id
+                };
+              } else {
+                // Payment not yet submitted, show as not started
+                return {
+                  period: periodName,
+                  amount: monthlyAmount,
+                  status: 'Not Started',
+                  id: null
+                };
+              }
+            });
+            
+            setInstallmentSchedule(remainingPeriods);
+          } else {
+            setInstallmentSchedule([]);
+          }
+        }
+      } catch (err) {
+        console.error('Failed to load installment schedule', err);
+        setInstallmentSchedule([]);
+      } finally {
+        if (mounted) setLoadingSchedule(false);
+      }
+    };
+    calculateRemainingBalance();
+    return () => { mounted = false; };
+  }, [currentEnrollment?.id, currentEnrollment?.total_amount]);
+
+  const fetchStudentData = async () => {
+    let student: any = null;
+    let current: any = null;
+    let paymentsList: any[] = [];
+    let assessmentPayload: any = null;
+    try {
+      setLoading(true);
+      const profile = await studentService.getProfile();
+      student = profile.student || profile.data?.student || profile;
+      setStudentProfile(student);
+
+      if (student) {
+        setProfileForm({
+          first_name: student.first_name || '',
+          middle_name: student.middle_name || '',
+          last_name: student.last_name || '',
+          suffix: student.suffix || '',
+          contact_number: student.contact_number || '',
+          address: student.address || '',
+          birth_date: student.birth_date || '',
+          gender: student.gender || '',
+          username: student.username || ''
+        });
+
+        if (student.student_type) {
+          const mappedType = normalizeStudentType(student.student_type);
+          setStudentType(mappedType);
+          setEnrollmentStep(2);
+        }
+      }
+
+      const enrollmentsData = await enrollmentService.getMyEnrollments();
+      const enrollmentsList = enrollmentsData?.data || [];
+      setEnrollments(enrollmentsList);
+
+      current =
+        enrollmentsList.find((e: any) => e.status !== 'Rejected' && e.status !== 'Enrolled') ||
+        enrollmentsList.find((e: any) => e.status === 'Enrolled');
+      setCurrentEnrollment(current);
+
+      // Load available subjects only for the student's course
+      try {
+        if (student && student.course) {
+          const subjectsResp = await subjectService.getSubjectsByCourse(student.course);
+          const subjectsList = subjectsResp?.data || [];
+          setAvailableSubjects(
+            subjectsList.map((s: any) => ({
+              code: s.subject_code,
+              name: s.subject_name,
+              instructor: 'TBA',
+              units: s.units || 0,
+              schedule: 'TBA',
+              subjectId: s.id
+            }))
+          );
+        } else {
+          // No course assigned — intentionally load no subjects for students without course
+          console.warn('Student has no course; not loading subjects for student');
+          setAvailableSubjects([]);
+        }
+      } catch (subErr) {
+        console.error('Failed to load available subjects:', subErr);
+        setAvailableSubjects([]);
+      }
+
+      if (current) {
+        setEnrollmentStatus(current.status || 'none');
+        const detailsResp = await enrollmentService.getEnrollmentDetails(current.id);
+        const details = detailsResp?.data?.enrollment || detailsResp?.data || {};
+        setEnrollmentDetails(details);
+        const subjects = detailsResp?.data?.subjects || details.enrollment_subjects || [];
+        setCurrentCourses(
+          subjects.map((es: any) => {
+            const firstOption = (es.schedule_options && es.schedule_options.length > 0) ? es.schedule_options[0] : null;
+            return {
+              code: es.subject_code || es.subject?.subject_code || '',
+              name: es.subject_name || es.subject?.subject_name || '',
+              instructor: es.instructor || es.schedule_instructor || es.subject?.instructor || (firstOption?.instructor) || 'TBA',
+              units: es.units || es.subject?.units || 0,
+              // prefer enrollment_subjects.schedule, then joined schedule_day_time, then first available schedule option
+              schedule: es.schedule || es.schedule_day_time || (firstOption?.day_time) || '',
+              room: es.room || es.schedule_room || (firstOption?.room) || '',
+              subject_id: es.subject_id || es.subject?.id,
+              schedule_id: es.schedule_id || null,
+              scheduleOptions: es.schedule_options || []
+            };
+          })
+        );
+
+        const scheduleList = subjects.map((es: any) => ({
+          day: es.schedule?.split(' ')[0] || 'TBA',
+          time: es.schedule?.split(' ').slice(1).join(' ') || 'TBA',
+          subject: es.subject_code || es.subject?.subject_code || '',
+          room: es.room || 'TBA'
+        }));
+        setSchedule(scheduleList);
+      }
+
+      // Preload assessment and payments using student_id when available
+      if (student?.student_id) {
+        try {
+          const assessmentResp = await paymentsService.getAssessment(student.student_id.toString());
+          assessmentPayload = assessmentResp?.data || assessmentResp;
+          const paymentsResp = await paymentsService.listPayments(student.student_id.toString());
+          paymentsList = paymentsResp?.data || paymentsResp || [];
+          setAssessmentData(assessmentPayload);
+          setPaymentHistory(paymentsList);
+        } catch (innerErr) {
+          console.error('Payment preload failed:', innerErr);
+        }
+      }
+
+
+    } catch (err) {
+      console.error('Failed loading student data', err);
+      let subjectsResp;
+      if (student && student.course) {
+        subjectsResp = await subjectService.getSubjectsByCourse(student.course);
+      } else {
+
+  
+        subjectsResp = await subjectService.getAllSubjects();
+      }
+
+      const subjectsList = subjectsResp?.data || [];
+      setAvailableSubjects(
+        subjectsList.map((s: any) => ({
+          code: s.subject_code,
+          name: s.subject_name,
+          instructor: 'TBA',
+          units: s.units || 0,
+          schedule: 'TBA',
+          subjectId: s.id
+        }))
+      );
+
+      rebuildNotifications(current?.status || 'none', assessmentPayload, paymentsList, current);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+    const fetchNotifications = async () => {
+      try {
+        setNotificationsLoading(true);
+        const resp = await studentService.listNotifications();
+        const items = resp?.data || resp || [];
+
+        const notices = items.map((r: any) => {
+          const title = r.action || (r.meta && r.meta.type) || 'Activity';
+          const detail = r.description || r.message || (r.meta && JSON.stringify(r.meta)) || '';
+          const text = (title || '').toString().toLowerCase();
+          let action: string | undefined = undefined;
+          let actionType: string | undefined = undefined;
+          let enrollmentId: any = r.entity_id || (r.meta && r.meta.enrollment_id) || null;
+
+          if (text.includes('payment') || text.includes('transaction') || (r.entity_type === 'transaction')) {
+            action = 'Review payments';
+            actionType = 'payments';
+          } else if (text.includes('enroll') || r.entity_type === 'enrollment') {
+            action = 'Download form';
+            actionType = 'download';
+          } else if (text.includes('section') || detail.toLowerCase().includes('section') || r.entity_type === 'section') {
+            action = 'View schedule';
+            actionType = 'schedule';
+          } else if (text.includes('profile') || text.includes('update')) {
+            action = 'View profile';
+            actionType = 'profile';
+          }
+
+          return {
+            id: r.id,
+            title: title.toString(),
+            detail: detail.toString(),
+            ts: r.created_at || r.ts,
+            is_read: r.is_read,
+            action,
+            actionType,
+            enrollmentId
+          };
+        });
+
+        setNotifications(notices);
+        setHasNewNotification(notices.some((n: any) => !n.is_read));
+      } catch (err) {
+        console.error('Failed fetching notifications', err);
+      } finally {
+        setNotificationsLoading(false);
+      }
+    };
+
+    const markNotificationRead = async (id: number | string) => {
+      try {
+        await studentService.markNotificationRead(id as any);
+        setNotifications(prev => prev.map((n: any) => n.id === Number(id) ? { ...n, is_read: true } : n));
+        setHasNewNotification(notifications.some((n: any) => !n.is_read));
+      } catch (err) {
+        console.error('Failed marking notification read', err);
+      }
+    };
+
+  const stats = [
+    { 
+      label: 'Total Enrollments', 
+      value: enrollments.length.toString(), 
+      icon: ClipboardCheck, 
+      color: 'from-blue-500 to-blue-600' 
+    },
+    { 
+      label: 'Approved', 
+      value: enrollments.filter((e: any) => e.status === 'Approved').length.toString(), 
+      icon: CheckCircle2, 
+      color: 'from-green-500 to-green-600' 
+    },
+    { 
+      label: 'Pending', 
+      value: enrollments.filter((e: any) => e.status === 'Pending').length.toString(), 
+      icon: Clock, 
+      color: 'from-orange-500 to-orange-600' 
+    },
+  ];
+
+  const toggleSubject = (code: string) => {
+    // Allow subject selection when status is "For Subject Selection"
+    if (enrollmentStatus !== 'For Subject Selection') return;
+    
+    setSelectedSubjects(prev => 
+      prev.includes(code) 
+        ? prev.filter(c => c !== code)
+        : [...prev, code]
+    );
+  };
+
+  const handleSubmitSubjects = async () => {
+    if (!currentEnrollment) return;
+    
+    try {
+      setLoading(true);
+      await enrollmentService.submitSubjects(currentEnrollment.id);
+      await fetchStudentData();
+      alert('Subjects submitted for Registrar assessment');
+    } catch (error: any) {
+      alert(error.message || 'Failed to submit subjects');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleSubmitPayment = async (paymentData: {
+    payment_method: string;
+    reference_number: string;
+    receipt_path?: string;
+    amount?: number;
+  }) => {
+    if (!currentEnrollment) return;
+    
+    try {
+      setLoading(true);
+      await enrollmentService.submitPayment(currentEnrollment.id, paymentData);
+      await fetchStudentData();
+      alert('Payment submitted for verification');
+    } catch (error: any) {
+      alert(error.message || 'Failed to submit payment');
+        // Pull assessment + payments early so tuition and notifications are populated
+        let paymentsList: any[] = [];
+        let assessmentPayload: any = null;
+        if (student?.student_id) {
+          try {
+            const assessmentResp = await paymentsService.getAssessment(student.student_id.toString());
+            assessmentPayload = assessmentResp?.data || assessmentResp;
+            const paymentsResp = await paymentsService.listPayments(student.student_id.toString());
+            paymentsList = paymentsResp?.data || paymentsResp || [];
+            setAssessmentData(assessmentPayload);
+            setPaymentHistory(paymentsList);
+          } catch (innerErr) {
+            console.error('Payment preload failed:', innerErr);
+          }
+        }
+        rebuildNotifications(
+          current?.status || 'none',
+          assessmentPayload,
+          paymentsList,
+          current
+        );
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const getRequiredDocuments = (studentType: string): string[] => {
+    const requiredDocs: Record<string, string[]> = {
+      'New': ['form137', 'form138', 'birth_certificate', 'moral_certificate'],
+      'Transferee': ['tor', 'certificate_transfer', 'birth_certificate', 'moral_certificate'],
+      'Returning': ['form137', 'birth_certificate'],
+      'Continuing': ['form137'],
+      'Scholar': ['form137', 'form138', 'birth_certificate', 'moral_certificate', 'scholarship_application', 'scholarship_supporting']
+    };
+    return requiredDocs[studentType] || [];
+  };
+
+  const areDocumentsComplete = (studentType: string): boolean => {
+    const requiredDocs = getRequiredDocuments(studentType);
+    return requiredDocs.length > 0 && requiredDocs.every(doc => uploadedDocuments[doc]);
+  };
+
+  const handleSubmitForAssessment = async () => {
+    try {
+      if (scholarshipType !== 'None' && !scholarshipLetter) {
+        alert('Please upload your scholarship letter before proceeding.');
+        return;
+      }
+
+      setSubmitting(true);
+      
+      // Normalize semester to match backend CHECK constraint ('1st', '2nd', 'Summer')
+      const normalizedSemester = semester?.toString().includes('1st')
+        ? '1st'
+        : semester?.toString().includes('2nd')
+        ? '2nd'
+        : semester?.toString().toLowerCase().includes('summer')
+        ? 'Summer'
+        : semester;
+
+      // Create enrollment
+      const enrollment = await enrollmentService.createEnrollment(schoolYear, normalizedSemester, scholarshipType);
+      const enrollmentId = enrollment?.data?.id || enrollment?.enrollment?.id || enrollment?.id;
+
+      if (!enrollmentId) {
+        throw new Error('Failed to retrieve created enrollment id');
+      }
+
+      // Upload scholarship letter if provided
+      if (scholarshipLetter) {
+        await studentService.uploadDocument(scholarshipLetter, 'scholarship_letter', enrollmentId);
+      }
+
+      // Upload documents if any
+      for (const [docType, file] of Object.entries(uploadedDocuments)) {
+        if (file instanceof File) {
+          await studentService.uploadDocument(file, docType, enrollmentId);
+        }
+      }
+
+      // Submit for assessment
+      await enrollmentService.submitForAssessment(enrollmentId);
+      
+      setEnrollmentStatus('Pending Assessment');
+      setEnrollmentStep(1);
+      setStudentType('');
+      setUploadedDocuments({});
+      setScholarshipType('None');
+      setScholarshipLetter(null);
+      setActiveSection('Dashboard');
+      await fetchStudentData();
+    } catch (error: any) {
+      alert(error.message || 'Failed to submit enrollment');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const openAssessmentModal = async (enrollmentId?: number) => {
+    try {
+      setLoadingAssessment(true);
+      const id = enrollmentId || currentEnrollment?.id;
+      if (!id) return;
+      const detailsResp = await enrollmentService.getEnrollmentDetails(id);
+      const details = detailsResp?.data?.enrollment || detailsResp?.data || {};
+      setEnrollmentDetails(details);
+      const subjects = detailsResp?.data?.subjects || details.enrollment_subjects || [];
+      setCurrentCourses(subjects.map((es: any) => {
+        const firstOption = (es.schedule_options && es.schedule_options.length > 0) ? es.schedule_options[0] : null;
+        return {
+          code: es.subject_code || es.subject?.subject_code || '',
+          name: es.subject_name || es.subject?.subject_name || '',
+          units: es.units || es.subject?.units || 0,
+          instructor: es.instructor || es.schedule_instructor || es.subject?.instructor || (firstOption?.instructor) || 'TBA',
+          schedule: es.schedule || es.schedule_day_time || (firstOption?.day_time) || '',
+          room: es.room || es.schedule_room || (firstOption?.room) || ''
+        };
+      }));
+      setAssessmentOpen(true);
+    } catch (err: any) {
+      console.error('Failed to load assessment details:', err);
+      alert(err.message || 'Failed to load assessment details');
+    } finally {
+      setLoadingAssessment(false);
+    }
+  };
+
+  const handleDocumentUpload = (docType: string, file: File | null) => {
+    if (file === null) {
+      const updated = { ...uploadedDocuments };
+      delete updated[docType];
+      setUploadedDocuments(updated);
+    } else {
+      setUploadedDocuments({...uploadedDocuments, [docType]: file});
+    }
+  };
+
+  const handleAddSubject = async (subjectId: number) => {
+    if (!currentEnrollment) return;
+    
+    try {
+      await enrollmentService.addSubject(currentEnrollment.id, subjectId);
+      await fetchStudentData();
+    } catch (error: any) {
+      alert(error.message || 'Failed to add subject');
+    }
+  };
+
+  const openScheduleSelector = async (subject: any) => {
+    if (!currentEnrollment) return;
+    try {
+      const resp = await subjectService.getSchedules(subject.subjectId);
+      const list = resp?.data || [];
+      if (list.length === 0) {
+        // no schedules, add directly
+        await enrollmentService.addSubject(currentEnrollment.id, subject.subjectId);
+        await fetchStudentData();
+        return;
+      }
+      setScheduleOptions(list);
+      setSchedulingSubject(subject);
+      setSelectedScheduleForAdd(list[0]?.id || null);
+      setScheduleModalOpen(true);
+    } catch (err: any) {
+      console.error('Failed to fetch schedules', err);
+      // fallback: add without schedule
+      await enrollmentService.addSubject(currentEnrollment.id, subject.subjectId);
+      await fetchStudentData();
+    }
+  };
+
+  const confirmAddWithSchedule = async () => {
+    if (!schedulingSubject || !currentEnrollment) return;
+    try {
+      setLoading(true);
+      await enrollmentService.addSubject(currentEnrollment.id, schedulingSubject.subjectId, undefined, undefined, undefined, selectedScheduleForAdd || undefined);
+      setScheduleModalOpen(false);
+      setSchedulingSubject(null);
+      await fetchStudentData();
+    } catch (err: any) {
+      alert(err.message || 'Failed to add subject with schedule');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRemoveSubject = async (subjectId: number) => {
+    if (!currentEnrollment) return;
+    
+    try {
+      await enrollmentService.removeSubject(currentEnrollment.id, subjectId);
+      await fetchStudentData();
+    } catch (error: any) {
+      alert(error.message || 'Failed to remove subject');
+    }
+  };
+
+  const handleViewNotification = () => {
+    setShowNotification(true);
+    // mark unread notifications as read when opening
+    const unread = notifications.filter((n: any) => !n.is_read).map((n: any) => n.id);
+    unread.forEach(id => { markNotificationRead(id); });
+    setHasNewNotification(false);
+  };
+
+  const openPaymentsModal = async (studentId?: string) => {
+    try {
+      setLoadingAssessment(true);
+      const id = studentId || studentProfile?.student_id;
+      if (!id) return;
+      const assessmentResp = await paymentsService.getAssessment(id.toString());
+      const paymentsResp = await paymentsService.listPayments(id.toString());
+      setAssessmentData(assessmentResp?.data || assessmentResp);
+      const history = paymentsResp?.data || paymentsResp || [];
+      setPaymentHistory(history);
+      rebuildNotifications(enrollmentStatus, assessmentResp?.data || assessmentResp, history, currentEnrollment);
+      setPaymentsOpen(true);
+    } catch (err: any) {
+      console.error('Failed to load payments:', err);
+      alert(err.message || 'Failed to load payments');
+    } finally {
+      setLoadingAssessment(false);
+    }
+  };
+
+  const handleDownloadEnrollmentForm = (enrollmentId?: any) => {
+    const id = enrollmentId || currentEnrollment?.id;
+    if (!id) {
+      alert('No enrollment form available');
+      return;
+    }
+    // Attempt to download from uploads folder; fallback to alert
+    const url = `/uploads/documents/enrollment-form-${id}.pdf`;
+    window.open(url, '_blank');
+  };
+
+  const handleUpdateProfile = async () => {
+    try {
+      setLoading(true);
+      await studentService.updateProfile(profileForm);
+      alert('Profile updated successfully');
+      await fetchStudentData();
+    } catch (error: any) {
+      alert(error.message || 'Failed to update profile');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleChangePassword = async () => {
+    if (passwordForm.newPassword !== passwordForm.confirmPassword) {
+      alert('New passwords do not match');
+      return;
+    }
+
+    if (passwordForm.newPassword.length < 6) {
+      alert('New password must be at least 6 characters long');
+      return;
+    }
+
+    try {
+      setLoading(true);
+      await studentService.changePassword(passwordForm.newPassword);
+      alert('Password changed successfully');
+      setPasswordForm({
+        newPassword: '',
+        confirmPassword: ''
+      });
+    } catch (error: any) {
+      alert(error.message || 'Failed to change password');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Payment Form Component
+  const PaymentForm = ({ 
+    enrollment, 
+    onViewAssessment, 
+    loadingAssessment, 
+    onSubmit, 
+    loading,
+    installmentPeriod
+  }: { 
+    enrollment: any; 
+    onViewAssessment: () => void; 
+    loadingAssessment: boolean; 
+    onSubmit: (data: any) => void;
+    loading: boolean;
+    installmentPeriod?: string;
+  }) => {
+    const [paymentType, setPaymentType] = useState('full'); // 'full' or 'partial'
+    const [paymentMethod, setPaymentMethod] = useState('');
+    const [referenceNumber, setReferenceNumber] = useState('');
+    const [receiptFile, setReceiptFile] = useState<File | null>(null);
+    const [uploading, setUploading] = useState(false);
+
+    // Calculate installment amounts
+    const totalAmount = enrollment.total_amount || 0;
+    const downPaymentAmount = (totalAmount / 4) + (totalAmount * 0.15); // 1/4 + 15% interest
+    const monthlyAmount = totalAmount / 4;
+
+    // If this is for a remaining installment period
+    const isRemainingInstallment = !!installmentPeriod && installmentPeriod !== 'Down Payment';
+    const paymentAmount = isRemainingInstallment ? monthlyAmount : downPaymentAmount;
+    const paymentPeriod = installmentPeriod || 'Down Payment';
+
+    const handleSubmit = async () => {
+      if (!paymentMethod) {
+        alert('Please select a payment method');
+        return;
+      }
+      if (!referenceNumber) {
+        alert('Please enter reference number');
+        return;
+      }
+
+      try {
+        setUploading(true);
+        let receiptPath = '';
+        
+        // Upload receipt first if provided
+        if (receiptFile) {
+          const uploadResp = await studentService.uploadDocument(
+            receiptFile, 
+            'payment_receipt', 
+            enrollment.id
+          );
+          receiptPath = uploadResp?.data?.file_path || '';
+        }
+
+        // For any installment period (including remaining periods), submit installment payment
+        if (paymentType === 'partial' || isRemainingInstallment) {
+          await studentService.submitInstallmentPayment({
+            enrollmentId: enrollment.id,
+            studentId: enrollment.student_id,
+            amount: paymentAmount,
+            period: paymentPeriod,
+            paymentMethod,
+            referenceNumber,
+            receiptPath
+          });
+          alert(`${paymentPeriod} payment submitted for verification`);
+          window.location.reload();
+        } else {
+          // Otherwise, submit regular full payment
+          await onSubmit({
+            payment_method: paymentMethod,
+            reference_number: referenceNumber,
+            receipt_path: receiptPath,
+            amount: enrollment.total_amount
+          });
+        }
+      } catch (error: any) {
+        alert(error.message || 'Failed to submit payment');
+      } finally {
+        setUploading(false);
+      }
+    };
+
+    return (
+      <Card className="border-0 shadow-lg p-6">
+        <div className="text-center mb-6">
+          <div className="w-16 h-16 rounded-full bg-purple-100 flex items-center justify-center mx-auto mb-4">
+            <CheckCircle2 className="h-8 w-8 text-purple-600" />
+          </div>
+          {isRemainingInstallment ? (
+            <>
+              <h3 className="text-xl font-semibold mb-2">{paymentPeriod} Payment</h3>
+              <p className="text-slate-600 mb-4">
+                Amount due: ₱{paymentAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+              </p>
+            </>
+          ) : (
+            <>
+              <h3 className="text-xl font-semibold mb-2">Proceed to Payment</h3>
+              <p className="text-slate-600 mb-4">
+                Your subjects have been approved. Total amount: ₱{enrollment.total_amount?.toLocaleString('en-US', { minimumFractionDigits: 2 }) || '0.00'}
+              </p>
+            </>
+          )}
+          
+          {/* Assessment Breakdown - Only show for initial payment, not for remaining installments */}
+          {!isRemainingInstallment && (
+            <div className="bg-slate-50 rounded-lg p-4 mb-4 text-left">
+              <h4 className="font-medium mb-2">Assessment Breakdown</h4>
+              <div className="text-sm space-y-1">
+                {enrollment.tuition > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">Tuition Fee</span>
+                    <span>₱{enrollment.tuition?.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {enrollment.registration > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">Registration Fee</span>
+                    <span>₱{enrollment.registration?.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {enrollment.library > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">Library Fee</span>
+                    <span>₱{enrollment.library?.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {enrollment.lab > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">Laboratory Fee</span>
+                    <span>₱{enrollment.lab?.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {enrollment.id_fee > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">ID Fee</span>
+                    <span>₱{enrollment.id_fee?.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                {enrollment.others > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-slate-600">Other Fees</span>
+                    <span>₱{enrollment.others?.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-semibold border-t pt-2 mt-2">
+                  <span>Total</span>
+                  <span>₱{enrollment.total_amount?.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span>
+                </div>
+              </div>
+            </div>
+          )}
+          
+          <div className="mb-4">
+            <Button variant="outline" onClick={onViewAssessment} disabled={loadingAssessment}>
+              {loadingAssessment ? <Loader2 className="h-4 w-4 animate-spin" /> : 'View Full Assessment'}
+            </Button>
+          </div>
+        </div>
+
+        {/* Payment Type Selection - Only show for initial payment */}
+        {!isRemainingInstallment && (
+          <div className="space-y-4 mb-6">
+            <Label className="text-base font-semibold">Select Payment Type</Label>
+            <div className="space-y-3">
+              <div className="flex items-center p-4 border rounded-lg cursor-pointer hover:bg-blue-50" 
+                onClick={() => setPaymentType('full')}
+              >
+                <input 
+                  type="radio" 
+                  name="paymentType" 
+                  value="full"
+                  checked={paymentType === 'full'}
+                  onChange={() => setPaymentType('full')}
+                  className="w-4 h-4"
+                />
+                <div className="ml-4 flex-1">
+                  <p className="font-medium">Full Payment</p>
+                  <p className="text-sm text-slate-500">Pay the entire amount now</p>
+                  <p className="text-sm font-semibold text-blue-600 mt-1">Total: ₱{totalAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                </div>
+              </div>
+
+              <div className="flex items-center p-4 border rounded-lg cursor-pointer hover:bg-orange-50" 
+                onClick={() => setPaymentType('partial')}
+              >
+                <input 
+                  type="radio" 
+                  name="paymentType" 
+                  value="partial"
+                  checked={paymentType === 'partial'}
+                  onChange={() => setPaymentType('partial')}
+                  className="w-4 h-4"
+                />
+                <div className="ml-4 flex-1">
+                  <p className="font-medium">Installment Payment (Partial)</p>
+                  <p className="text-sm text-slate-500">Pay down payment now, rest in installments</p>
+                  <div className="mt-2 space-y-1 text-sm">
+                    <p className="text-orange-600 font-semibold">Down Payment (Due Soon): ₱{downPaymentAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} (includes 15% interest)</p>
+                    <p className="text-slate-600">Monthly Installments (3x): ₱{monthlyAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })} each</p>
+                    <p className="text-xs text-slate-500">Periods: Prelim, Midterm, Finals</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Payment Details */}
+        <div className="space-y-4">
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <Label>Payment Method *</Label>
+              <Select value={paymentMethod} onValueChange={setPaymentMethod}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select payment method" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Cash">Cash</SelectItem>
+                  <SelectItem value="Bank Transfer">Bank Transfer</SelectItem>
+                  <SelectItem value="Online Payment">Online Payment (GCash, Maya, etc.)</SelectItem>
+                  <SelectItem value="Credit Card">Credit Card</SelectItem>
+                  <SelectItem value="Check">Check</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Reference Number *</Label>
+              <Input 
+                placeholder="Enter reference/transaction number" 
+                value={referenceNumber}
+                onChange={(e) => setReferenceNumber(e.target.value)}
+              />
+            </div>
+          </div>
+          <div>
+            <Label>Upload Proof of Payment *</Label>
+            <Input 
+              type="file" 
+              accept="image/*,.pdf" 
+              onChange={(e) => setReceiptFile(e.target.files?.[0] || null)}
+            />
+            <p className="text-xs text-slate-500 mt-1">Upload a screenshot or photo of your payment receipt (JPG, PNG, PDF)</p>
+          </div>
+          <Button 
+            className="w-full bg-gradient-to-r from-blue-600 to-indigo-600"
+            onClick={handleSubmit}
+            disabled={loading || uploading || !paymentMethod || !referenceNumber}
+          >
+            {(loading || uploading) ? (
+              <>
+                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                Submitting...
+              </>
+            ) : (
+              <>
+                <Upload className="h-4 w-4 mr-2" />
+                Submit Payment for Verification
+              </>
+            )}
+          </Button>
+          <p className="text-xs text-slate-500 text-center">
+            Your payment will be reviewed by the cashier. You will be notified once verified.
+          </p>
+        </div>
+
+        {/* Installment Payment Schedule - Show if partial payment was selected */}
+        {paymentType === 'partial' && installmentSchedule.length > 0 && (
+          <div className="mt-6">
+            <Card className="border border-orange-200 bg-orange-50 p-4">
+              <h4 className="font-semibold text-orange-900 mb-4">Your Installment Payment Schedule</h4>
+              <div className="space-y-3">
+                {installmentSchedule.map((payment: any, index: number) => (
+                  <div key={payment.id || index} className="flex items-center justify-between bg-white p-3 rounded border border-orange-100">
+                    <div className="flex-1">
+                      <p className="font-medium text-sm">{payment.period}</p>
+                      <p className="text-xs text-slate-600">Amount: ₱{(payment.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                    </div>
+                    <Badge className={`
+                      ${payment.status === 'Approved' ? 'bg-green-100 text-green-800' : 
+                        payment.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' : 
+                        payment.status === 'Rejected' ? 'bg-red-100 text-red-800' : 
+                        'bg-slate-100 text-slate-800'}
+                    `}>
+                      {payment.status}
+                    </Badge>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
+        )}
+      </Card>
+    );
+  };
+
+  const renderDashboardContent = () => {
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-6">
+        {/* Status Alert */}
+        {enrollmentStatus === 'Enrolled' && (
+          <Alert className="bg-green-50 border-green-200">
+            <CheckCircle2 className="h-4 w-4 text-green-600" />
+            <AlertTitle className="text-green-900">Enrollment Complete!</AlertTitle>
+            <AlertDescription className="text-green-700">
+              You are now enrolled. You can view your schedule and download your enrollment form.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {enrollmentStatus === 'Payment Verification' && (
+          <Alert className="bg-blue-50 border-blue-200">
+            <Clock className="h-4 w-4 text-blue-600" />
+            <AlertTitle className="text-blue-900">Payment Verification</AlertTitle>
+            <AlertDescription className="text-blue-700">
+              Your payment is being verified by the registrar. You will be notified once verified.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {enrollmentStatus === 'For Payment' && (
+          <Alert className="bg-purple-50 border-purple-200">
+            <Clock className="h-4 w-4 text-purple-600" />
+            <AlertTitle className="text-purple-900">Proceed to Payment</AlertTitle>
+            <AlertDescription className="text-purple-700">
+              Your subjects have been approved. Please proceed to payment.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {enrollmentStatus === 'For Registrar Assessment' && (
+          <Alert className="bg-indigo-50 border-indigo-200">
+            <Clock className="h-4 w-4 text-indigo-600" />
+            <AlertTitle className="text-indigo-900">Awaiting Registrar Assessment</AlertTitle>
+            <AlertDescription className="text-indigo-700">
+              Your subject selection has been submitted. The Registrar is reviewing your enrollment fees.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {enrollmentStatus === 'For Dean Approval' && (
+          <Alert className="bg-yellow-50 border-yellow-200">
+            <Clock className="h-4 w-4 text-yellow-600" />
+            <AlertTitle className="text-yellow-900">Awaiting Dean Approval</AlertTitle>
+            <AlertDescription className="text-yellow-700">
+              Your enrollment fees have been assessed. Awaiting Dean approval.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {enrollmentStatus === 'For Subject Selection' && (
+          <Alert className="bg-green-50 border-green-200">
+            <CheckCircle2 className="h-4 w-4 text-green-600" />
+            <AlertTitle className="text-green-900">Select Your Subjects</AlertTitle>
+            <AlertDescription className="text-green-700">
+              Your enrollment has been approved. Please select your subjects.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {enrollmentStatus === 'For Admin Approval' && (
+          <Alert className="bg-orange-50 border-orange-200">
+            <Clock className="h-4 w-4 text-orange-600" />
+            <AlertTitle className="text-orange-900">Awaiting Admin Approval</AlertTitle>
+            <AlertDescription className="text-orange-700">
+              Your enrollment has been assessed. Waiting for admin approval.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {enrollmentStatus === 'Pending Assessment' && (
+          <Alert className="bg-orange-50 border-orange-200">
+            <Clock className="h-4 w-4 text-orange-600" />
+            <AlertTitle className="text-orange-900">Pending Assessment</AlertTitle>
+            <AlertDescription className="text-orange-700">
+              Your enrollment documents have been submitted and are awaiting registrar assessment.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {enrollmentStatus === 'Rejected' && (
+          <Alert className="bg-red-50 border-red-200">
+            <AlertCircle className="h-4 w-4 text-red-600" />
+            <AlertTitle className="text-red-900">Enrollment Rejected</AlertTitle>
+            <AlertDescription className="text-red-700">
+              Please contact the admin office for more information.
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Remaining Installments Section - Show for enrolled students with balance */}
+        {enrollmentStatus === 'Enrolled' && installmentSchedule.length > 0 && (
+          <Card className="border border-blue-200 bg-blue-50 p-6 shadow-lg">
+            <h3 className="text-lg font-semibold text-blue-900 mb-4">Remaining Installment Payments</h3>
+            <p className="text-sm text-slate-600 mb-4">You have paid the down payment. Below is your remaining balance to pay:</p>
+            <div className="space-y-4">
+              {installmentSchedule.map((payment: any, idx: number) => (
+                <div key={`${payment.period}-${idx}`} className="bg-white rounded-lg p-4 flex items-center justify-between">
+                  <div className="flex-1">
+                    <p className="font-semibold text-slate-900">{payment.period} Payment</p>
+                    <p className="text-sm text-slate-600">Amount Due: ₱{(payment.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                    <Badge className={`mt-2 ${
+                      payment.status === 'Approved' ? 'bg-green-100 text-green-800' :
+                      payment.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
+                      payment.status === 'Rejected' ? 'bg-red-100 text-red-800' :
+                      'bg-slate-100 text-slate-800'
+                    }`}>
+                      {payment.status}
+                    </Badge>
+                    {payment.status === 'Rejected' && (
+                      <p className="text-xs text-red-600 mt-2">Please resubmit your payment</p>
+                    )}
+                  </div>
+                  {(payment.status === 'Not Started' || payment.status === 'Rejected') && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setSelectedInstallmentPeriod(payment.period);
+                        setInstallmentPaymentOpen(true);
+                      }}
+                    >
+                      Pay Now
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <Card className="p-4 shadow-sm">
+            <p className="text-xs text-slate-500 mb-1">Enrollment Status</p>
+            <p className="text-lg font-semibold text-slate-900">{enrollmentStatus || 'Not started'}</p>
+            {currentEnrollment?.school_year && (
+              <p className="text-sm text-slate-600">{currentEnrollment.school_year} • {currentEnrollment.semester}</p>
+            )}
+          </Card>
+          <Card className="p-4 shadow-sm">
+            <p className="text-xs text-slate-500 mb-1">Tuition & Fees</p>
+            <p className="text-lg font-semibold text-slate-900">
+              ₱{(assessmentData?.total_amount || assessmentData?.total || currentEnrollment?.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+            </p>
+            <p className="text-sm text-slate-600">Paid: ₱{paymentHistory.reduce((sum: number, p: any) => sum + (p.amount || 0), 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+          </Card>
+          <Card className="p-4 shadow-sm">
+            <p className="text-xs text-slate-500 mb-1">Grades Status</p>
+            <p className="text-lg font-semibold text-slate-900">{enrollmentDetails?.grades_status || 'Pending'}</p>
+            <p className="text-sm text-slate-600">Subjects loaded: {currentCourses.length}</p>
+          </Card>
+        </div>
+
+        {/* Current Courses */}
+        <Card className="border-0 shadow-lg">
+          <div className="p-6">
+            <h3 className="text-lg font-semibold mb-4">Current Enrolled Subjects</h3>
+            {currentCourses.length === 0 ? (
+              <p className="text-slate-500 text-center py-8">No enrolled subjects</p>
+            ) : (
+              <div className="space-y-3">
+                {currentCourses.map((course, index) => (
+                  <div key={index} className="p-4 border rounded-lg hover:bg-slate-50">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <div className="flex items-center gap-2 mb-1">
+                          <Badge className="bg-blue-100 text-blue-700 border-0">
+                            {course.code}
+                          </Badge>
+                          <span className="text-slate-900 font-medium">{course.name}</span>
+                        </div>
+                        <p className="text-sm text-slate-500">Instructor: {course.instructor}</p>
+                        {/* Prefer explicit schedule on enrollment; otherwise show the first available schedule option for the subject */}
+                        {(() => {
+                          const inferred = (course.schedule && course.schedule.trim()) ? {
+                            day_time: course.schedule,
+                            room: course.room,
+                            instructor: course.instructor
+                          } : (course.scheduleOptions && course.scheduleOptions.length > 0 ? course.scheduleOptions[0] : null);
+
+                          if (inferred) {
+                            return (
+                              <>
+                                <p className="text-sm text-slate-500">Schedule: {inferred.day_time}</p>
+                                {inferred.room && <p className="text-sm text-slate-500">Room: {inferred.room}</p>}
+                              </>
+                            );
+                          }
+                          return null;
+                        })()}
+                      </div>
+                      <Badge variant="outline">{course.units} Units</Badge>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+      </div>
+    );
+  };
+
+  const renderEnrollmentContent = () => (
+    <div>
+      {['Pending Assessment', 'For Admin Approval', 'For Registrar Assessment', 'For Dean Approval', 'Payment Verification'].includes(enrollmentStatus) && (
+        <Card className="border-0 shadow-lg p-8 text-center">
+          <div className="w-16 h-16 rounded-full bg-orange-100 flex items-center justify-center mx-auto mb-4">
+            <Clock className="h-8 w-8 text-orange-600" />
+          </div>
+          <h3 className="text-xl mb-2">Enrollment {enrollmentStatus}</h3>
+          <p className="text-slate-600 mb-4">Your enrollment is being processed. Please wait for the next step.</p>
+          <Badge className="bg-orange-100 text-orange-700 border-0">{enrollmentStatus}</Badge>
+        </Card>
+      )}
+
+      {enrollmentStatus === 'For Subject Selection' && (
+        <Card className="border-0 shadow-lg p-8 text-center">
+          <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
+            <CheckCircle2 className="h-8 w-8 text-green-600" />
+          </div>
+          <h3 className="text-xl mb-2">Select Your Subjects</h3>
+          <p className="text-slate-600 mb-4">Your enrollment has been approved. Please select your subjects.</p>
+          <div className="flex gap-2 justify-center">
+            <Button 
+              onClick={() => setActiveSection('Subjects')}
+              className="bg-gradient-to-r from-blue-600 to-indigo-600"
+            >
+              Add Subjects
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {enrollmentStatus === 'For Payment' && currentEnrollment && (
+        <PaymentForm 
+          enrollment={currentEnrollment}
+          onViewAssessment={() => openAssessmentModal(currentEnrollment.id)}
+          loadingAssessment={loadingAssessment}
+          onSubmit={handleSubmitPayment}
+          loading={loading}
+        />
+      )}
+
+      {enrollmentStatus === 'Enrolled' && (
+        <Card className="border-0 shadow-lg p-8 text-center">
+          <div className="w-16 h-16 rounded-full bg-green-100 flex items-center justify-center mx-auto mb-4">
+            <CheckCircle2 className="h-8 w-8 text-green-600" />
+          </div>
+          <h3 className="text-xl mb-2">Enrollment Complete!</h3>
+          <p className="text-slate-600 mb-4">You are now enrolled. View your schedule and download your enrollment form.</p>
+          <div className="flex gap-2 justify-center">
+            <Button 
+              onClick={() => setActiveSection('My Schedule')}
+              className="bg-gradient-to-r from-blue-600 to-indigo-600"
+            >
+              View Schedule
+            </Button>
+            <Button variant="outline">
+              <Download className="h-4 w-4 mr-2" />
+              Download Enrollment Form
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {!['Pending Assessment', 'For Admin Approval', 'For Subject Selection', 'For Registrar Assessment', 'For Dean Approval', 'For Payment', 'Payment Verification', 'Enrolled'].includes(enrollmentStatus) && (
+        <Card className="border-0 shadow-lg p-6">
+          <div className="mb-8 border-b pb-6">
+            <h3 className="text-lg font-semibold mb-4 text-blue-900">Scholarship Selection</h3>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              <div>
+                <Label htmlFor="scholarship-type">Scholarship Type</Label>
+                <Select value={scholarshipType} onValueChange={(v) => {
+                  setScholarshipType(v);
+                  if (v === 'None') setScholarshipLetter(null);
+                }}>
+                  <SelectTrigger id="scholarship-type" className="mt-2">
+                    <SelectValue placeholder="Select scholarship type..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SCHOLAR_TYPES.map(type => (
+                      <SelectItem key={type} value={type}>{type}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              
+              {scholarshipType !== 'None' && (
+                <div>
+                  <DocumentUpload
+                    label="Scholarship Letter"
+                    description="Upload your official scholarship letter or certificate"
+                    docType="scholarship_letter"
+                    onFileSelect={(_type, file) => setScholarshipLetter(file)}
+                    selectedFile={scholarshipLetter as any}
+                    acceptedFormats=".pdf,.jpg,.jpeg,.png"
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Student Type Display (auto-set by admin) */}
+          {enrollmentStep === 1 && (
+            <div className="space-y-4">
+              {resolvedStudentType ? (
+                <Alert className="bg-blue-50 border-blue-200">
+                  <AlertTitle className="text-blue-900">Student Type: {studentProfile?.student_type || enrollmentDetails?.student_type || currentEnrollment?.student_type}</AlertTitle>
+                  <AlertDescription className="text-blue-700">
+                    Your enrollment type has been set by the administrator. Click Continue to proceed.
+                  </AlertDescription>
+                </Alert>
+              ) : (
+                <div>
+                  <Label htmlFor="student-type">Select Student Type</Label>
+                  <Select value={studentType} onValueChange={setStudentType}>
+                    <SelectTrigger id="student-type" className="mt-2">
+                      <SelectValue placeholder="Choose student type..." />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="new">New Student</SelectItem>
+                      <SelectItem value="transferee">Transferee</SelectItem>
+                      <SelectItem value="returning">Returning Student</SelectItem>
+                      <SelectItem value="continuing">Continuing Student</SelectItem>
+                      <SelectItem value="scholar">Scholar Student</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
+
+              {(resolvedStudentType || studentType) && (
+                <Button 
+                  onClick={() => setEnrollmentStep(2)}
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600"
+                >
+                  {resolvedStudentType ? 'Continue' : 'Next'}
+                </Button>
+              )}
+            </div>
+          )}
+
+          {/* New Student */}
+          {enrollmentStep === 2 && studentType === 'new' && (
+            <div className="space-y-4">
+              <h3 className="text-lg mb-4">New Student - Upload Requirements</h3>
+              
+              <DocumentUpload
+                label="Form 137"
+                description="Upload your Form 137 (Report Card)"
+                docType="form137"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['form137']}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <DocumentUpload
+                label="Form 138"
+                description="Upload your Form 138 (Transcript of Records)"
+                docType="form138"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['form138']}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <DocumentUpload
+                label="Birth Certificate"
+                description="Upload a copy of your Birth Certificate"
+                docType="birth_certificate"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['birth_certificate']}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <DocumentUpload
+                label="Good Moral Certificate"
+                description="Upload your Good Moral Certificate"
+                docType="moral_certificate"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['moral_certificate']}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <div className="border-t pt-4">
+                <div className="flex items-center justify-between">
+                  <Label>Download Admission Forms</Label>
+                  <Button size="sm" variant="outline" className="gap-2" onClick={() => window.open(getDocDownloadUrl('scholarship_application'), '_blank')}>
+                    <Download className="h-4 w-4" />
+                    Download
+                  </Button>
+                </div>
+                <p className="text-xs text-slate-500 mt-1">Download and fill out the admission forms</p>
+              </div>
+
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-6 mb-4">
+                <h4 className="font-medium text-amber-900 mb-2">Submission Options</h4>
+                <div className="space-y-2 text-sm text-amber-800">
+                  <p><strong>To Follow:</strong> Use this button if you have incomplete documents. You can submit your enrollment now and complete the remaining documents later.</p>
+                  <p><strong>Submit for Assessment:</strong> Use this button when you have submitted all required documents. Your enrollment will proceed to the assessment phase.</p>
+                </div>
+              </div>
+
+              <div className="flex gap-2 mt-6">
+                <Button variant="outline" onClick={() => setEnrollmentStep(1)}>Back</Button>
+                {!areDocumentsComplete('New') && (
+                  <Button variant="secondary" onClick={handleSubmitForAssessment} disabled={submitting}>
+                    {submitting ? 'Submitting...' : 'To Follow'}
+                  </Button>
+                )}
+                <Button 
+                  onClick={handleSubmitForAssessment}
+                  disabled={!areDocumentsComplete('New') || submitting}
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600"
+                >
+                  {submitting ? 'Submitting...' : 'Submit for Assessment'}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Transferee */}
+          {enrollmentStep === 2 && studentType === 'transferee' && (
+            <div className="space-y-4">
+              <h3 className="text-lg mb-4">Transferee - Upload Requirements</h3>
+              
+              <DocumentUpload
+                label="Transcript of Records (TOR)"
+                description="Upload your official TOR from previous school"
+                docType="tor"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['tor']}
+                downloadUrl={getDocDownloadUrl('tor')}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <DocumentUpload
+                label="Certificate of Transfer"
+                description="Upload your Certificate of Transfer/Honorable Dismissal"
+                docType="certificate_transfer"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['certificate_transfer']}
+                downloadUrl={getDocDownloadUrl('certificate_transfer')}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <DocumentUpload
+                label="Birth Certificate"
+                description="Upload a copy of your Birth Certificate"
+                docType="birth_certificate"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['birth_certificate']}
+                downloadUrl={getDocDownloadUrl('birth_certificate')}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <DocumentUpload
+                label="Good Moral Certificate"
+                description="Upload your Good Moral Certificate"
+                docType="moral_certificate"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['moral_certificate']}
+                downloadUrl={getDocDownloadUrl('moral_certificate')}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-6 mb-4">
+                <h4 className="font-medium text-amber-900 mb-2">Submission Options</h4>
+                <div className="space-y-2 text-sm text-amber-800">
+                  <p><strong>To Follow:</strong> Use this button if you have incomplete documents. You can submit your enrollment now and complete the remaining documents later.</p>
+                  <p><strong>Submit for Assessment:</strong> Use this button when you have submitted all required documents. Your enrollment will proceed to the assessment phase.</p>
+                </div>
+              </div>
+
+              <div className="flex gap-2 mt-6">
+                <Button variant="outline" onClick={() => setEnrollmentStep(1)}>Back</Button>
+                {!areDocumentsComplete('Transferee') && (
+                  <Button variant="secondary" onClick={handleSubmitForAssessment} disabled={submitting}>
+                    {submitting ? 'Submitting...' : 'To Follow'}
+                  </Button>
+                )}
+                <Button 
+                  onClick={handleSubmitForAssessment}
+                  disabled={!areDocumentsComplete('Transferee') || submitting}
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600"
+                >
+                  {submitting ? 'Submitting...' : 'Submit for Assessment'}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Returning Student */}
+          {enrollmentStep === 2 && studentType === 'returning' && (
+            <div className="space-y-4">
+              <h3 className="text-lg mb-4">Returning Student - Upload Requirements</h3>
+              
+              <DocumentUpload
+                label="Form 137"
+                description="Upload your Form 137 (Report Card)"
+                docType="form137"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['form137']}
+                downloadUrl={getDocDownloadUrl('form137')}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <DocumentUpload
+                label="Birth Certificate"
+                description="Upload your birth certificate"
+                docType="birth_certificate"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['birth_certificate']}
+                downloadUrl={getDocDownloadUrl('birth_certificate')}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-6 mb-4">
+                <h4 className="font-medium text-amber-900 mb-2">Submission Options</h4>
+                <div className="space-y-2 text-sm text-amber-800">
+                  <p><strong>To Follow:</strong> Use this button if you have incomplete documents. You can submit your enrollment now and complete the remaining documents later.</p>
+                  <p><strong>Submit for Assessment:</strong> Use this button when you have submitted all required documents. Your enrollment will proceed to the assessment phase.</p>
+                </div>
+              </div>
+
+              <div className="flex gap-2 mt-6">
+                <Button variant="outline" onClick={() => setEnrollmentStep(1)}>Back</Button>
+                {!areDocumentsComplete('Returning') && (
+                  <Button variant="secondary" onClick={handleSubmitForAssessment} disabled={submitting}>
+                    {submitting ? 'Submitting...' : 'To Follow'}
+                  </Button>
+                )}
+                <Button 
+                  onClick={handleSubmitForAssessment}
+                  disabled={!areDocumentsComplete('Returning') || submitting}
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600"
+                >
+                  {submitting ? 'Submitting...' : 'Submit for Assessment'}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Continuing Student */}
+          {enrollmentStep === 2 && studentType === 'continuing' && (
+            <div className="space-y-4">
+              <h3 className="text-lg mb-4">Continuing Student</h3>
+              
+              <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-4">
+                <h4 className="mb-2">Previous Term Data</h4>
+                <div className="space-y-1 text-sm">
+                  <p><span className="text-slate-600">Term:</span> 1st Semester 2023-2024</p>
+                  <p><span className="text-slate-600">Program:</span> BSIT</p>
+                  <p><span className="text-slate-600">Year Level:</span> 2nd Year</p>
+                  <p><span className="text-slate-600">GPA:</span> 3.5</p>
+                </div>
+              </div>
+
+              <div className="flex gap-2 mt-6">
+                <Button variant="outline" onClick={() => setEnrollmentStep(1)}>Back</Button>
+                <Button 
+                  onClick={handleSubmitForAssessment}
+                  disabled={submitting}
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600"
+                >
+                  {submitting ? 'Submitting...' : 'Submit for Assessment'}
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {/* Scholar Student */}
+          {enrollmentStep === 2 && studentType === 'scholar' && (
+            <div className="space-y-4">
+              <h3 className="text-lg mb-4">Scholar Student</h3>
+              
+              <div className="border rounded-lg p-4 mb-4">
+                <div className="flex items-center justify-between mb-2">
+                  <Label>Scholarship Application Form</Label>
+                  <Button size="sm" variant="outline" className="gap-2">
+                    <Download className="h-4 w-4" />
+                    Download
+                  </Button>
+                </div>
+                <p className="text-xs text-slate-500">Download the scholarship application form</p>
+              </div>
+
+              <Button 
+                onClick={() => setEnrollmentStep(3)}
+                className="bg-gradient-to-r from-blue-600 to-indigo-600"
+              >
+                Next
+              </Button>
+            </div>
+          )}
+
+          {enrollmentStep === 3 && studentType === 'scholar' && (
+            <div className="space-y-4">
+              <h3 className="text-lg mb-4">Upload Scholarship Documents</h3>
+              
+              <DocumentUpload
+                label="Scholarship Application Form"
+                description="Upload completed scholarship application"
+                docType="scholarship_application"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['scholarship_application']}
+                downloadUrl={getDocDownloadUrl('scholarship_application')}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <DocumentUpload
+                label="Supporting Documents"
+                description="Upload required supporting documents"
+                docType="scholarship_supporting"
+                onFileSelect={handleDocumentUpload}
+                selectedFile={uploadedDocuments['scholarship_supporting']}
+                downloadUrl={getDocDownloadUrl('scholarship_supporting')}
+                acceptedFormats=".pdf,.doc,.docx,.jpg,.jpeg,.png"
+              />
+
+              <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 mt-6 mb-4">
+                <h4 className="font-medium text-amber-900 mb-2">Submission Options</h4>
+                <div className="space-y-2 text-sm text-amber-800">
+                  <p><strong>To Follow:</strong> Use this button if you have incomplete documents. You can submit your enrollment now and complete the remaining documents later.</p>
+                  <p><strong>Submit for Assessment:</strong> Use this button when you have submitted all required documents. Your enrollment will proceed to the assessment phase.</p>
+                </div>
+              </div>
+
+              <div className="flex gap-2 mt-6">
+                <Button variant="outline" onClick={() => setEnrollmentStep(2)}>Back</Button>
+                {!areDocumentsComplete('Scholar') && (
+                  <Button variant="secondary" onClick={handleSubmitForAssessment} disabled={submitting}>
+                    {submitting ? 'Submitting...' : 'To Follow'}
+                  </Button>
+                )}
+                <Button 
+                  onClick={handleSubmitForAssessment}
+                  disabled={!areDocumentsComplete('Scholar') || submitting}
+                  className="bg-gradient-to-r from-blue-600 to-indigo-600"
+                >
+                  {submitting ? 'Submitting...' : 'Submit for Assessment'}
+                </Button>
+              </div>
+            </div>
+          )}
+        </Card>
+      )}
+    </div>
+  );
+
+  const renderSubjectsContent = () => {
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        </div>
+      );
+    }
+
+    const totalUnits = currentCourses.reduce((sum: number, c: any) => sum + (c.units || 0), 0);
+
+    return (
+      <div>
+        <Card className="border-0 shadow-lg p-6">
+          <div className="mb-6">
+            <h3 className="text-lg font-semibold mb-1">Enrolled Subjects</h3>
+            <p className="text-slate-500 text-sm">Subjects assigned by the Registrar and approved by the Dean.</p>
+          </div>
+
+          {currentCourses.length === 0 ? (
+            <div className="py-12 text-center text-slate-500">
+              <p className="text-sm">No subjects have been assigned to your enrollment yet.</p>
+            </div>
+          ) : (
+            <>
+              <div className="space-y-2">
+                {currentCourses.map((c: any, i: number) => (
+                  <div key={i} className="flex items-center justify-between p-3 border rounded-lg bg-slate-50">
+                    <div>
+                      <p className="font-semibold text-sm">{c.code}</p>
+                      <p className="text-xs text-slate-500">{c.name}</p>
+                    </div>
+                    <Badge variant="secondary" className="text-xs">{c.units} units</Badge>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-4 pt-4 border-t flex justify-between text-sm font-semibold text-slate-700">
+                <span>Total Units</span>
+                <span>{totalUnits}</span>
+              </div>
+            </>
+          )}
+        </Card>
+      </div>
+    );
+  };
+
+  const renderGradesContent = () => {
+    return (
+      <Card className="border-0 shadow-lg p-6">
+        <h3 className="text-lg font-semibold mb-4">Grades</h3>
+        {loadingGrades ? (
+          <div className="flex items-center justify-center py-8"><Loader2 className="h-6 w-6 animate-spin" /></div>
+        ) : grades.length === 0 ? (
+          <p className="text-sm text-slate-500">No grades available.</p>
+        ) : (
+          <div className="space-y-3">
+            {grades.map((g: any, i: number) => (
+              <div key={i} className="p-3 border rounded-lg flex items-center justify-between">
+                <div>
+                  <div className="font-medium">{g.subject_code} — {g.subject_name}</div>
+                  <div className="text-xs text-slate-500">{g.school_year} • {g.semester}</div>
+                </div>
+                <div className="text-right">
+                  <div className="font-semibold">{g.grade ?? 'N/A'}</div>
+                  <div className="text-xs text-slate-400">{g.status || ''}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    );
+  };
+
+  const renderScheduleContent = () => {
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        </div>
+      );
+    }
+
+    // Group schedule by day for better display
+    const scheduleByDay: Record<string, any[]> = {};
+    currentCourses.forEach((course: any) => {
+      if (course.schedule) {
+        const parts = course.schedule.split(' ');
+        const day = parts[0] || 'TBA';
+        const time = parts.slice(1).join(' ') || 'TBA';
+        if (!scheduleByDay[day]) {
+          scheduleByDay[day] = [];
+        }
+        scheduleByDay[day].push({
+          code: course.code,
+          name: course.name,
+          time,
+          room: course.room || 'TBA',
+          instructor: course.instructor || 'TBA'
+        });
+      }
+    });
+
+    const daysOrder = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday'];
+    const sortedDays = Object.keys(scheduleByDay).sort((a, b) => {
+      const aIndex = daysOrder.indexOf(a);
+      const bIndex = daysOrder.indexOf(b);
+      if (aIndex === -1) return 1;
+      if (bIndex === -1) return -1;
+      return aIndex - bIndex;
+    });
+
+    return (
+      <div>
+        <Card className="border-0 shadow-lg p-6">
+          <h3 className="text-lg font-semibold mb-4">My Class Schedule</h3>
+          
+          {currentEnrollment && (
+            <div className="mb-6 text-sm text-slate-600">
+              <p>School Year: {currentEnrollment.school_year || 'N/A'}</p>
+              <p>Semester: {currentEnrollment.semester || 'N/A'}</p>
+            </div>
+          )}
+
+          {sortedDays.length === 0 ? (
+            <p className="text-slate-500 text-center py-8">No schedule available</p>
+          ) : (
+            <div className="space-y-4">
+              {sortedDays.map((day) => (
+                <div key={day} className="border rounded-lg p-4">
+                  <h4 className="font-semibold text-slate-900 mb-3">{day}</h4>
+                  <div className="space-y-2">
+                    {scheduleByDay[day].map((item, index) => (
+                      <div key={index} className="flex items-center justify-between p-3 bg-slate-50 rounded-lg">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <Badge className="bg-blue-100 text-blue-700 border-0">{item.code}</Badge>
+                            <span className="text-slate-900">{item.name}</span>
+                          </div>
+                          <p className="text-sm text-slate-500">
+                            {item.time} • Room: {item.room} • Instructor: {item.instructor}
+                          </p>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+    );
+  };
+
+  const renderTuitionFeesContent = () => {
+    if (loading) {
+      return (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        </div>
+      );
+    }
+
+    return (
+      <div>
+        <Card className="border-0 shadow-lg p-6 mb-6">
+          <h3 className="text-lg font-semibold mb-3">Tuition and Fees</h3>
+          <div className="text-sm text-slate-700 mb-4">
+            <div className="flex justify-between"><span>Total Assessment</span><span>₱{(assessmentData?.total || assessmentData?.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></div>
+            <div className="flex justify-between"><span>Amount Due</span><span>₱{(assessmentData?.due || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></div>
+          </div>
+
+          {currentEnrollment ? (
+            (currentEnrollment.status === 'Ready for Payment' || currentEnrollment.status === 'For Payment') ? (
+              <PaymentForm 
+                enrollment={currentEnrollment}
+                onViewAssessment={() => openAssessmentModal(currentEnrollment.id)}
+                loadingAssessment={loadingAssessment}
+                onSubmit={handleSubmitPayment}
+                loading={loading}
+              />
+            ) : (
+              <div className="text-sm text-slate-600">
+                <p>Current enrollment status: <strong>{currentEnrollment.status}</strong></p>
+                <p className="mt-2">If your assessment is approved and marked Ready for Payment, you will be able to upload a payment receipt here.</p>
+              </div>
+            )
+          ) : (
+            <p className="text-sm text-slate-500">No active enrollment found.</p>
+          )}
+        </Card>
+
+        <Card className="border-0 shadow-lg p-6">
+          <h4 className="text-lg font-medium mb-3">Payment History</h4>
+          {paymentHistory.length === 0 ? (
+            <p className="text-sm text-slate-500">No payments found</p>
+          ) : (
+            <div className="space-y-2 text-sm">
+              {paymentHistory.map((p: any) => (
+                <div key={p.id} className="flex justify-between border rounded p-2">
+                  <div>
+                    <div className="font-medium">{p.method || p.reference || 'Payment'}</div>
+                    <div className="text-xs text-slate-500">{new Date(p.ts).toLocaleString()}</div>
+                  </div>
+                  <div className="font-medium">₱{(p.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+
+        {/* Remaining Installments Section */}
+        {enrollmentStatus === 'Enrolled' && installmentSchedule.length > 0 && (
+          <Card className="border border-blue-200 bg-blue-50 p-6 shadow-lg mt-6">
+            <h3 className="text-lg font-semibold text-blue-900 mb-4">Remaining Installment Payments</h3>
+            <p className="text-sm text-slate-600 mb-4">You have paid the down payment. Below is your remaining balance to pay:</p>
+            <div className="space-y-4">
+              {installmentSchedule.map((payment: any, idx: number) => (
+                <div key={`${payment.period}-${idx}`} className="bg-white rounded-lg p-4 flex items-center justify-between">
+                  <div className="flex-1">
+                    <p className="font-semibold text-slate-900">{payment.period} Payment</p>
+                    <p className="text-sm text-slate-600">Amount Due: ₱{(payment.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                    <Badge className={`mt-2 ${
+                      payment.status === 'Approved' ? 'bg-green-100 text-green-800' :
+                      payment.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
+                      payment.status === 'Rejected' ? 'bg-red-100 text-red-800' :
+                      'bg-slate-100 text-slate-800'
+                    }`}>
+                      {payment.status}
+                    </Badge>
+                    {payment.status === 'Rejected' && (
+                      <p className="text-xs text-red-600 mt-2">Please resubmit your payment</p>
+                    )}
+                  </div>
+                  {(payment.status === 'Not Started' || payment.status === 'Rejected') && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        setSelectedInstallmentPeriod(payment.period);
+                        setInstallmentPaymentOpen(true);
+                      }}
+                    >
+                      Pay Now
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+      </div>
+    );
+  };
+
+  const renderProfileContent = () => {
+    if (loading || !studentProfile) {
+      return (
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600" />
+        </div>
+      );
+    }
+
+    return (
+      <div>
+        <Card className="border-0 shadow-lg p-6">
+          <h3 className="text-lg font-semibold mb-6">My Profile</h3>
+          
+          <div className="space-y-6">
+            {/* Basic Information */}
+            <div>
+              <h4 className="text-md font-medium mb-4">Personal Information</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="profile-first-name">First Name</Label>
+                  <Input 
+                    id="profile-first-name"
+                    value={profileForm.first_name}
+                    onChange={(e) => setProfileForm({ ...profileForm, first_name: e.target.value })}
+                    className="mt-2"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="profile-last-name">Last Name</Label>
+                  <Input 
+                    id="profile-last-name"
+                    value={profileForm.last_name}
+                    onChange={(e) => setProfileForm({ ...profileForm, last_name: e.target.value })}
+                    className="mt-2"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="profile-middle-name">Middle Name</Label>
+                  <Input 
+                    id="profile-middle-name"
+                    value={profileForm.middle_name}
+                    onChange={(e) => setProfileForm({ ...profileForm, middle_name: e.target.value })}
+                    className="mt-2"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="profile-birth-date">Birth Date</Label>
+                  <Input 
+                    id="profile-birth-date"
+                    type="date"
+                    value={profileForm.birth_date ? profileForm.birth_date.split('T')[0] : ''}
+                    onChange={(e) => setProfileForm({ ...profileForm, birth_date: e.target.value })}
+                    className="mt-2"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="profile-gender">Gender</Label>
+                  <Select
+                    value={profileForm.gender}
+                    onValueChange={(value) => setProfileForm({ ...profileForm, gender: value })}
+                  >
+                    <SelectTrigger id="profile-gender" className="mt-2">
+                      <SelectValue placeholder="Select gender" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="Male">Male</SelectItem>
+                      <SelectItem value="Female">Female</SelectItem>
+                      <SelectItem value="Other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div>
+                  <Label htmlFor="profile-contact">Contact Number</Label>
+                  <Input 
+                    id="profile-contact"
+                    value={profileForm.contact_number}
+                    onChange={(e) => setProfileForm({ ...profileForm, contact_number: e.target.value })}
+                    className="mt-2"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Contact Information */}
+            <div className="border-t pt-6">
+              <h4 className="text-md font-medium mb-4">Contact Information</h4>
+              <div>
+                <Label htmlFor="profile-address">Address</Label>
+                <Input 
+                  id="profile-address"
+                  value={profileForm.address}
+                  onChange={(e) => setProfileForm({ ...profileForm, address: e.target.value })}
+                  className="mt-2"
+                />
+              </div>
+            </div>
+
+            {/* Account Credentials */}
+            <div className="border-t pt-6">
+              <h4 className="text-md font-medium mb-4">Account Credentials</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="profile-username">Username</Label>
+                  <Input 
+                    id="profile-username"
+                    value={profileForm.username}
+                    onChange={(e) => setProfileForm({ ...profileForm, username: e.target.value })}
+                    className="mt-2"
+                    placeholder="Enter username"
+                  />
+                </div>
+              </div>
+            </div>
+
+            {/* Password Change */}
+            <div className="border-t pt-6">
+              <h4 className="text-md font-medium mb-4">Change Password</h4>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <Label htmlFor="new-password">New Password</Label>
+                  <Input 
+                    id="new-password"
+                    type="password"
+                    value={passwordForm.newPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, newPassword: e.target.value })}
+                    className="mt-2"
+                    placeholder="Enter new password"
+                  />
+                </div>
+                <div>
+                  <Label htmlFor="confirm-password">Confirm New Password</Label>
+                  <Input 
+                    id="confirm-password"
+                    type="password"
+                    value={passwordForm.confirmPassword}
+                    onChange={(e) => setPasswordForm({ ...passwordForm, confirmPassword: e.target.value })}
+                    className="mt-2"
+                    placeholder="Confirm new password"
+                  />
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                onClick={handleChangePassword}
+                disabled={loading || !passwordForm.newPassword || !passwordForm.confirmPassword}
+                className="mt-4"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Changing...
+                  </>
+                ) : (
+                  'Change Password'
+                )}
+              </Button>
+            </div>
+
+            {/* Student Information (Read-only) */}
+            <div className="border-t pt-6">
+              <h4 className="text-md font-medium mb-4">Student Information</h4>
+              <div className="grid grid-cols-2 gap-4 text-sm">
+                <div>
+                  <p className="text-slate-500">Student ID</p>
+                  <p className="font-medium">{studentProfile.student_id || 'N/A'}</p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Course</p>
+                  <p className="font-medium">{studentProfile.course || 'N/A'}</p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Year Level</p>
+                  <p className="font-medium">{studentProfile.year_level ? `${studentProfile.year_level}${studentProfile.year_level === 1 ? 'st' : studentProfile.year_level === 2 ? 'nd' : studentProfile.year_level === 3 ? 'rd' : 'th'} Year` : 'N/A'}</p>
+                </div>
+                <div>
+                  <p className="text-slate-500">Student Type</p>
+                  <p className="font-medium">{studentProfile.student_type || 'N/A'}</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-2 justify-end border-t pt-6">
+              <Button 
+                variant="outline"
+                onClick={() => {
+                  setProfileForm({
+                    first_name: studentProfile.first_name || '',
+                    middle_name: studentProfile.middle_name || '',
+                    last_name: studentProfile.last_name || '',
+                    suffix: studentProfile.suffix || '',
+                    contact_number: studentProfile.contact_number || '',
+                    address: studentProfile.address || '',
+                    birth_date: studentProfile.birth_date || '',
+                    gender: studentProfile.gender || '',
+                    username: studentProfile.username || ''
+                  });
+                }}
+              >
+                Reset
+              </Button>
+              <Button 
+                className="bg-gradient-to-r from-blue-600 to-indigo-600"
+                onClick={handleUpdateProfile}
+                disabled={loading}
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  'Save Profile Changes'
+                )}
+              </Button>
+            </div>
+          </div>
+        </Card>
+      </div>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-50 via-blue-50 to-indigo-50">
+      <div className="flex h-screen overflow-hidden">
+        {/* Sidebar */}
+        <div className="w-72 bg-white border-r border-slate-200 shadow-xl flex flex-col">
+          <div className="p-4 border-b border-slate-200">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg">
+                <GraduationCap className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <h3 className="text-sm text-slate-900">IC Northgate</h3>
+                <p className="text-xs text-slate-500">Student Portal</p>
+              </div>
+            </div>
+          </div>
+
+          {/* Navigation */}
+          <nav className="flex-1 p-3 space-y-1">
+            <button
+              onClick={() => setActiveSection('Dashboard')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-sm ${
+                activeSection === 'Dashboard' 
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' 
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <LayoutDashboard className="h-4 w-4" />
+              Dashboard
+            </button>
+            
+            <button
+              onClick={() => {
+                setActiveSection('Enroll');
+              }}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-sm ${
+                activeSection === 'Enroll' 
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' 
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <ClipboardCheck className="h-4 w-4" />
+              Enroll
+              {enrollmentStatus !== 'none' && enrollmentStatus !== 'Enrolled' && (
+                <Badge className="ml-auto bg-orange-500 text-white border-0 text-xs px-1.5 py-0">
+                  {enrollmentStatus}
+                </Badge>
+              )}
+            </button>
+            
+            <button
+              onClick={() => setActiveSection('Subjects')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-sm ${
+                activeSection === 'Subjects' 
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' 
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <BookOpen className="h-4 w-4" />
+              Subjects
+            </button>
+            <button
+              onClick={() => setActiveSection('Tuition and Fees')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-sm ${
+                activeSection === 'Tuition and Fees' 
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' 
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <span className="h-4 w-4 flex items-center text-sm">₱</span>
+              Tuition and Fees
+            </button>
+
+            <button
+              onClick={() => setActiveSection('My Schedule')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-sm ${
+                activeSection === 'My Schedule' 
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' 
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <CalendarIcon className="h-4 w-4" />
+              My Schedule
+            </button>
+
+              <button
+                onClick={() => setActiveSection('Grades')}
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-sm ${
+                  activeSection === 'Grades'
+                    ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg'
+                    : 'text-slate-700 hover:bg-slate-100'
+                }`}
+              >
+                <GraduationCap className="h-4 w-4" />
+                Grades
+              </button>
+
+            <button
+              onClick={() => setActiveSection('My Profile')}
+              className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-sm ${
+                activeSection === 'My Profile' 
+                  ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white shadow-lg' 
+                  : 'text-slate-700 hover:bg-slate-100'
+              }`}
+            >
+              <UserCircle className="h-4 w-4" />
+              My Profile
+            </button>
+          </nav>
+
+          <div className="p-3 border-t border-slate-200">
+            <Button 
+              variant="outline" 
+              className="w-full justify-center gap-2 hover:bg-red-50 hover:text-red-600 hover:border-red-200 h-9 text-sm"
+              onClick={onLogout}
+            >
+              <LogOut className="h-4 w-4" />
+              Logout
+            </Button>
+          </div>
+        </div>
+
+        {/* Main Content */}
+        <div className="flex-1 overflow-auto">
+          <div className="p-6 h-full">
+            {/* Header */}
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h1 className="text-2xl mb-1">
+                  {activeSection === 'Dashboard' && 'Student Dashboard'}
+                  {activeSection === 'Enroll' && 'Enroll'}
+                  {activeSection === 'Subjects' && 'Subjects'}
+                  {activeSection === 'My Schedule' && 'My Schedule'}
+                  {activeSection === 'My Profile' && 'My Profile'}
+                </h1>
+                <p className="text-sm text-slate-600">Welcome back to your learning portal</p>
+              </div>
+              <div className="flex items-center gap-3">
+                {hasNewNotification && (enrollmentStatus === 'For Subject Selection' || enrollmentStatus === 'For Payment' || enrollmentStatus === 'Enrolled') && (
+                  <button 
+                    onClick={handleViewNotification}
+                    className="relative p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                  >
+                    <Bell className="h-5 w-5 text-slate-600" />
+                    <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
+                  </button>
+                )}
+                <div className="text-right">
+                  <p className="text-xs text-slate-600">Student ID: {studentProfile?.student_id || 'N/A'}</p>
+                  <p className="text-xs text-slate-500">{(studentProfile?.course ? `${studentProfile.course} - ` : '') + (studentProfile?.year_level ? `${studentProfile.year_level}${getOrdinalSuffix(studentProfile.year_level)} Year` : '')}</p>
+                </div>
+                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg">
+                  <User className="h-5 w-5 text-white" />
+                </div>
+              </div>
+            </div>
+
+            {/* Stats Grid - Only on Dashboard */}
+            {activeSection === 'Dashboard' && (
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                {stats.map((stat, index) => {
+                  const Icon = stat.icon;
+                  return (
+                    <Card key={index} className="p-4 border-0 shadow-lg hover:shadow-xl transition-all bg-white">
+                      <div className="flex items-start justify-between mb-3">
+                        <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${stat.color} flex items-center justify-center shadow-md`}>
+                          <Icon className="h-5 w-5 text-white" />
+                        </div>
+                      </div>
+                      <h3 className="text-2xl mb-1">{stat.value}</h3>
+                      <p className="text-xs text-slate-600">{stat.label}</p>
+                    </Card>
+                  );
+                })}
+              </div>
+            )}
+
+            {/* Dynamic Content */}
+            {activeSection === 'Dashboard' && renderDashboardContent()}
+            {activeSection === 'Enroll' && renderEnrollmentContent()}
+            {activeSection === 'Subjects' && renderSubjectsContent()}
+            {activeSection === 'My Schedule' && renderScheduleContent()}
+            {activeSection === 'My Profile' && renderProfileContent()}
+            {activeSection === 'Tuition and Fees' && renderTuitionFeesContent()}
+            {activeSection === 'Grades' && renderGradesContent && renderGradesContent()}
+            {/* Notifications Modal */}
+            <Dialog open={showNotification} onOpenChange={setShowNotification}>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Notifications</DialogTitle>
+                  <DialogDescription>Recent updates about your enrollment and payments.</DialogDescription>
+                </DialogHeader>
+                <div className="mt-4 space-y-3">
+                  {notifications.length === 0 && (
+                    <p className="text-sm text-slate-500">No new notifications.</p>
+                  )}
+                  {notifications.map((notice, idx) => (
+                    <div key={idx} className="p-3 border rounded-lg">
+                      <div className="flex items-start justify-between">
+                        <div>
+                          <p className="font-medium">{notice.title}</p>
+                          <p className="text-sm text-slate-600">{notice.detail}</p>
+                        </div>
+                        {notice.action && (
+                          <div className="text-right">
+                            <Button
+                              size="sm"
+                              variant={notice.actionType === 'download' ? 'outline' : 'default'}
+                              onClick={() => {
+                                if (notice.actionType === 'payments') {
+                                  openPaymentsModal();
+                                } else if (notice.actionType === 'download') {
+                                  handleDownloadEnrollmentForm(notice.enrollmentId);
+                                } else if (notice.actionType === 'schedule') {
+                                  setActiveSection('My Schedule');
+                                } else if (notice.actionType === 'profile') {
+                                  setActiveSection('My Profile');
+                                }
+                                setShowNotification(false);
+                              }}
+                            >
+                              {notice.action}
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  ))}
+                </div>
+                <div className="flex justify-end mt-4">
+                  <Button variant="outline" onClick={() => setShowNotification(false)}>Close</Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+
+            {/* Payments Modal */}
+            <Dialog open={paymentsOpen} onOpenChange={setPaymentsOpen}>
+              <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Tuition Assessment & Payments</DialogTitle>
+                  <DialogDescription>Review your tuition assessment and payment history.</DialogDescription>
+                </DialogHeader>
+                <div className="mt-4 space-y-4">
+                  <div>
+                    <h4 className="text-sm font-medium">Assessment</h4>
+                    <div className="mt-2 text-sm">
+                      <div className="flex justify-between"><div>Total</div><div>₱{(assessmentData?.total || assessmentData?.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div></div>
+                      <div className="flex justify-between"><div>Due</div><div>₱{(assessmentData?.due || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div></div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-sm font-medium">Payment History</h4>
+                    {paymentHistory.length === 0 ? (
+                      <p className="text-sm text-slate-500 mt-2">No payments found</p>
+                    ) : (
+                      <div className="mt-2 space-y-2 text-sm">
+                        {paymentHistory.map((p: any) => (
+                          <div key={p.id} className="flex justify-between border rounded p-2">
+                            <div>
+                              <div className="font-medium">{p.method || p.reference || 'Payment'}</div>
+                              <div className="text-xs text-slate-500">{new Date(p.ts).toLocaleString()}</div>
+                            </div>
+                            <div className="font-medium">₱{(p.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <div className="flex justify-end mt-6">
+                  <Button variant="outline" onClick={() => setPaymentsOpen(false)}>Close</Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+
+            {/* Installment Payment Modal */}
+            <Dialog open={installmentPaymentOpen} onOpenChange={setInstallmentPaymentOpen}>
+              <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Pay Installment</DialogTitle>
+                  <DialogDescription>Submit your payment for the {selectedInstallmentPeriod} period</DialogDescription>
+                </DialogHeader>
+                {currentEnrollment && (
+                  <PaymentForm
+                    enrollment={currentEnrollment}
+                    onViewAssessment={() => openAssessmentModal(currentEnrollment.id)}
+                    loadingAssessment={loadingAssessment}
+                    onSubmit={async () => {
+                      // Refresh both student data and installment schedule
+                      await fetchStudentData();
+                      // Force refresh of installment schedule
+                      const resp = await studentService.getInstallmentSchedule(currentEnrollment.id);
+                      const payments = resp?.data || [];
+                      const downPayment = payments.find((p: any) => p.period === 'Down Payment');
+                      
+                      if (downPayment && currentEnrollment?.total_amount) {
+                        const totalAmount = currentEnrollment.total_amount;
+                        const monthlyAmount = totalAmount / 4;
+                        const remainingPeriodNames = ['Prelim Period', 'Midterm Period', 'Finals Period'];
+                        
+                        const remainingPeriods = remainingPeriodNames.map(periodName => {
+                          const existingPayment = payments.find((p: any) => p.period === periodName);
+                          
+                          if (existingPayment) {
+                            return {
+                              period: periodName,
+                              amount: existingPayment.amount,
+                              status: existingPayment.status,
+                              id: existingPayment.id
+                            };
+                          } else {
+                            return {
+                              period: periodName,
+                              amount: monthlyAmount,
+                              status: 'Not Started',
+                              id: null
+                            };
+                          }
+                        });
+                        
+                        setInstallmentSchedule(remainingPeriods);
+                      }
+                      
+                      setInstallmentPaymentOpen(false);
+                      setSelectedInstallmentPeriod(null);
+                    }}
+                    loading={loading}
+                    installmentPeriod={selectedInstallmentPeriod || undefined}
+                  />
+                )}
+              </DialogContent>
+            </Dialog>
+
+            {/* Assessment Modal */}
+            <Dialog open={assessmentOpen} onOpenChange={setAssessmentOpen}>
+              <DialogContent className="max-w-2xl">
+                <DialogHeader>
+                  <DialogTitle>Assessment Breakdown</DialogTitle>
+                  <DialogDescription>Review assessment fees and subject fees for this enrollment.</DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4 mt-4">
+                  {/* Scholarship Info */}
+                  {enrollmentDetails?.scholarship_type && enrollmentDetails.scholarship_type !== 'None' && (
+                    <div className="bg-blue-50 border border-blue-200 rounded-lg p-3">
+                      <h4 className="text-sm font-semibold text-blue-800 mb-1">Scholarship Applied</h4>
+                      <div className="grid grid-cols-2 gap-1 text-sm text-blue-900">
+                        <div className="text-blue-700">Type</div>
+                        <div className="font-medium">{enrollmentDetails.scholarship_type}</div>
+                        {enrollmentDetails.scholarship_coverage && (
+                          <>
+                            <div className="text-blue-700">Coverage</div>
+                            <div className="font-medium">{enrollmentDetails.scholarship_coverage} of tuition</div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <h4 className="text-sm font-medium">Assessment Fees</h4>
+                    <div className="grid grid-cols-2 gap-2 text-sm mt-2">
+                      <div>Tuition {enrollmentDetails?.scholarship_coverage && enrollmentDetails?.scholarship_type !== 'None' ? <span className="text-blue-600 text-xs">(after {enrollmentDetails.scholarship_coverage} discount)</span> : ''}</div>
+                      <div className="text-right">₱{(enrollmentDetails?.tuition || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                      <div>Registration</div>
+                      <div className="text-right">₱{(enrollmentDetails?.registration || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                      <div>Library</div>
+                      <div className="text-right">₱{(enrollmentDetails?.library || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                      <div>Laboratory</div>
+                      <div className="text-right">₱{(enrollmentDetails?.lab || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                      <div>ID Fee</div>
+                      <div className="text-right">₱{(enrollmentDetails?.id_fee || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                      <div>Others</div>
+                      <div className="text-right">₱{(enrollmentDetails?.others || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <h4 className="text-sm font-medium">Subject Fees</h4>
+                    <div className="text-sm mt-2">
+                      <div className="flex justify-between"><div>Total Units</div><div>{enrollmentDetails?.total_units || 0}</div></div>
+                      <div className="flex justify-between"><div>Rate per Unit</div><div>₱700.00</div></div>
+                      <div className="flex justify-between font-medium mt-2"><div>Subject Fees</div><div>₱{((enrollmentDetails?.total_units || 0) * 700).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div></div>
+
+                      <div className="mt-3">
+                        <h5 className="text-sm font-medium">Subjects</h5>
+                        <div className="mt-2 space-y-2">
+                          {currentCourses.map((s: any, idx: number) => (
+                            <div key={idx} className="flex justify-between text-sm">
+                              <div>{s.code} — {s.name}</div>
+                              <div>{s.units} unit{s.units !== 1 ? 's' : ''} • ₱{(s.units * 700).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="border-t pt-3 space-y-1">
+                    {(() => {
+                      const covStr = enrollmentDetails?.scholarship_coverage || '';
+                      const covPct = parseFloat(covStr) / 100 || 0;
+                      const baseTuition = covPct > 0 && enrollmentDetails?.tuition != null
+                        ? enrollmentDetails.tuition / (1 - covPct)
+                        : enrollmentDetails?.tuition || 0;
+                      const deduction = covPct > 0 ? baseTuition - (enrollmentDetails?.tuition || 0) : 0;
+                      return (
+                        <>
+                          {deduction > 0 && (
+                            <>
+                              <div className="flex justify-between text-sm text-slate-600">
+                                <div>Subtotal (before scholarship)</div>
+                                <div>₱{(enrollmentDetails?.total_amount + deduction).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                              </div>
+                              <div className="flex justify-between text-sm text-green-700 font-medium">
+                                <div>Scholarship Deduction ({enrollmentDetails.scholarship_coverage} of tuition)</div>
+                                <div>−₱{deduction.toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                              </div>
+                            </>
+                          )}
+                          <div className="flex justify-between font-semibold text-base pt-1 border-t">
+                            <div>Total Amount Due</div>
+                            <div>₱{(enrollmentDetails?.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</div>
+                          </div>
+                        </>
+                      );
+                    })()}
+                  </div>
+                </div>
+                <div className="flex justify-end mt-6">
+                  <Button variant="outline" onClick={() => setAssessmentOpen(false)}>Close</Button>
+                </div>
+              </DialogContent>
+            </Dialog>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
