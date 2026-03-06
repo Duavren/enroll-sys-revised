@@ -6,23 +6,26 @@ export const getAllFaculty = async (req: AuthRequest, res: Response) => {
   try {
     const { department, status, search } = req.query;
 
-    let sql = 'SELECT * FROM faculty WHERE 1=1';
+    let sql = `SELECT f.*, s.section_code as assigned_section, s.section_name as assigned_section_name
+      FROM faculty f
+      LEFT JOIN sections s ON s.adviser_id = f.id
+      WHERE 1=1`;
     const params: any[] = [];
 
     if (department) {
-      sql += ' AND department = ?';
+      sql += ' AND f.department = ?';
       params.push(department);
     }
     if (status) {
-      sql += ' AND status = ?';
+      sql += ' AND f.status = ?';
       params.push(status);
     }
     if (search) {
-      sql += ` AND (faculty_id LIKE ? OR first_name LIKE ? OR last_name LIKE ?)`;
+      sql += ` AND (f.faculty_id LIKE ? OR f.first_name LIKE ? OR f.last_name LIKE ?)`;
       params.push(`%${search}%`, `%${search}%`, `%${search}%`);
     }
 
-    sql += ' ORDER BY last_name, first_name';
+    sql += ' ORDER BY f.last_name, f.first_name';
 
     const faculty = await query(sql, params);
 

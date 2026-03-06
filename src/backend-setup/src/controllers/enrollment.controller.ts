@@ -1,6 +1,7 @@
 import { Response } from 'express';
 import { query, run, get } from '../database/connection';
 import { AuthRequest } from '../middleware/auth.middleware';
+import { sendEnrollmentNotification } from '../utils/notification.helper';
 
 // Helper: get fee rates for a course from courses_fees table, with safe defaults
 const getCourseFeeRates = async (course: string) => {
@@ -80,6 +81,9 @@ export const createEnrollment = async (req: AuthRequest, res: Response) => {
        VALUES (?, ?, ?, 'Pending Assessment', ?, ?)`,
       [studentId, school_year, semester, scholarship_type || 'None', scholarship_letter_path || null]
     );
+
+    // Send notification
+    await sendEnrollmentNotification(studentId, result.lastInsertRowid as number, 'Pending Assessment');
 
     res.status(201).json({
       success: true,
@@ -462,6 +466,9 @@ export const submitForAssessment = async (req: AuthRequest, res: Response) => {
       ['Pending Assessment', id]
     );
 
+    // Send notification to student
+    await sendEnrollmentNotification(enrollments[0].student_id, id, 'Pending Assessment');
+
     // Log activity
     await run(
       'INSERT INTO activity_logs (user_id, action, entity_type, entity_id, description) VALUES (?, ?, ?, ?, ?)',
@@ -550,6 +557,9 @@ export const assessEnrollment = async (req: AuthRequest, res: Response) => {
       [totalAmount, tuition || 0, registration || 0, library || 0, lab || 0, id_fee || 0, others || 0, userId, remarks || null, scholarship_coverage || null, id]
     );
 
+    // Send notification
+    await sendEnrollmentNotification(enrollments[0].student_id, id, 'For Registrar Assessment');
+
     // Log activity
     await run(
       'INSERT INTO activity_logs (user_id, action, entity_type, entity_id, description) VALUES (?, ?, ?, ?, ?)',
@@ -610,6 +620,9 @@ export const approveEnrollmentAssessment = async (req: AuthRequest, res: Respons
        WHERE id = ?`,
       [userId, remarks || null, id]
     );
+
+    // Send notification
+    await sendEnrollmentNotification(enrollments[0].student_id, parseInt(id as string), 'For Subject Selection');
 
     // Log activity
     await run(
@@ -695,6 +708,9 @@ export const submitSubjects = async (req: AuthRequest, res: Response) => {
       [totalUnits, totalAmount, id]
     );
 
+    // Send notification
+    await sendEnrollmentNotification(enrollments[0].student_id, parseInt(id as string), 'For Registrar Assessment');
+
     // Log activity
     await run(
       'INSERT INTO activity_logs (user_id, action, entity_type, entity_id, description) VALUES (?, ?, ?, ?, ?)',
@@ -758,6 +774,9 @@ export const approveSubjectSelection = async (req: AuthRequest, res: Response) =
 
     await run(updateQuery, updateParams);
 
+    // Send notification to student
+    await sendEnrollmentNotification(enrollments[0].student_id, id, 'For Payment');
+
     await run(
       'INSERT INTO activity_logs (user_id, action, entity_type, entity_id, description) VALUES (?, ?, ?, ?, ?)',
       [userId, 'DEAN_APPROVE_ENROLLMENT', 'enrollment', id, 'Dean approved enrollment. Forwarded to student for payment.']
@@ -786,6 +805,9 @@ export const rejectEnrollmentByDean = async (req: AuthRequest, res: Response) =>
       `UPDATE enrollments SET status = 'Pending Assessment', remarks = ?, updated_at = datetime('now') WHERE id = ?`,
       [remarks || null, id]
     );
+
+    // Send notification to student
+    await sendEnrollmentNotification(enrollments[0].student_id, id, 'Pending Assessment');
 
     await run(
       'INSERT INTO activity_logs (user_id, action, entity_type, entity_id, description) VALUES (?, ?, ?, ?, ?)',
@@ -841,6 +863,9 @@ export const submitPayment = async (req: AuthRequest, res: Response) => {
        WHERE id = ?`,
       [id]
     );
+
+    // Send notification
+    await sendEnrollmentNotification(enrollments[0].student_id, parseInt(id as string), 'Payment Verification');
 
     // Log activity
     await run(
@@ -914,6 +939,9 @@ export const verifyPayment = async (req: AuthRequest, res: Response) => {
       [remarks || null, id]
     );
 
+    // Send notification
+    await sendEnrollmentNotification(enrollments[0].student_id, parseInt(id as string), 'Enrolled');
+
     // Log activity
     await run(
       'INSERT INTO activity_logs (user_id, action, entity_type, entity_id, description) VALUES (?, ?, ?, ?, ?)',
@@ -970,6 +998,9 @@ export const approveEnrollment = async (req: AuthRequest, res: Response) => {
        WHERE id = ?`,
       [userId, remarks || null, id]
     );
+
+    // Send notification
+    await sendEnrollmentNotification(enrollments[0].student_id, parseInt(id as string), 'For Subject Selection');
 
     // Log activity
     await run(

@@ -378,7 +378,7 @@ export const getAllEnrollments = async (req: AuthRequest, res: Response) => {
     let sql = `
       SELECT e.*, 
         s.student_id, s.first_name, s.middle_name, s.last_name,
-        s.course, s.year_level,
+        s.course, s.year_level, s.section,
         (SELECT COUNT(*) FROM enrollment_subjects es WHERE es.enrollment_id = e.id) as subject_count,
         (SELECT SUM(sub.units) FROM enrollment_subjects es2 JOIN subjects sub ON es2.subject_id = sub.id WHERE es2.enrollment_id = e.id) as total_units,
         (SELECT COUNT(*) FROM documents d WHERE d.enrollment_id = e.id) as documents_count
@@ -427,7 +427,7 @@ export const getEnrollmentById = async (req: AuthRequest, res: Response) => {
     const enrollments = await query(
       `SELECT e.*, 
         s.student_id, s.first_name, s.middle_name, s.last_name,
-        s.course, s.year_level, s.student_type
+        s.course, s.year_level, s.section, s.student_type
        FROM enrollments e
        JOIN students s ON e.student_id = s.id
        WHERE e.id = ?`,

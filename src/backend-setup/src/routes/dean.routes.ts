@@ -8,7 +8,8 @@ import {
   getCurriculumByProgram,
   addSubjectToCurriculum,
   removeSubjectFromCurriculum,
-  getDeanDashboardStats
+  getDeanDashboardStats,
+  assignTeacherToSection
 } from '../controllers/dean.controller';
 import { approveSubjectSelection, rejectEnrollmentByDean } from '../controllers/enrollment.controller';
 import { getEnrollmentForAssessment } from '../controllers/registrar.controller';
@@ -35,5 +36,8 @@ router.delete('/programs/:id', authenticate, authorize('dean', 'superadmin'), de
 router.get('/programs/:programId/curriculum', authenticate, authorize('dean', 'superadmin'), getCurriculumByProgram);
 router.post('/curriculum', authenticate, authorize('dean', 'superadmin'), addSubjectToCurriculum);
 router.delete('/curriculum/:id', authenticate, authorize('dean', 'superadmin'), removeSubjectFromCurriculum);
+
+// Teacher Section Assignment
+router.post('/assign-section', authenticate, authorize('dean', 'superadmin'), assignTeacherToSection);
 
 export default router;

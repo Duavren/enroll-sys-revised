@@ -7,6 +7,7 @@ const router = Router();
 // Assessment and payment history - authenticated users and appropriate roles
 router.get('/assessment/:studentId', authenticate, authorize('student', 'admin', 'superadmin', 'registrar', 'cashier'), payments.getAssessment);
 router.get('/student/:studentId', authenticate, authorize('student', 'admin', 'superadmin', 'registrar', 'cashier'), payments.listPayments);
+router.get('/approved/:studentId', authenticate, authorize('student', 'admin', 'superadmin', 'registrar', 'cashier'), payments.getApprovedPayments);
 
 // Add a payment (students can submit, cashier/admin can also add)
 router.post('/student/:studentId', authenticate, authorize('student', 'cashier', 'admin', 'superadmin'), payments.addPayment);

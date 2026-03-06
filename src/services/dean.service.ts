@@ -163,6 +163,15 @@ class DeanService {
       throw new Error(handleApiError(error));
     }
   }
+
+  async assignTeacherToSection(teacherId: string, sectionId: string) {
+    try {
+      const response = await api.post('/dean/assign-section', { teacherId, sectionId });
+      return response.data;
+    } catch (error) {
+      throw new Error(handleApiError(error));
+    }
+  }
 }
 
 export const deanService = new DeanService();

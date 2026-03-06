@@ -64,6 +64,17 @@ async function setupDatabase() {
     `);
     console.log('✅ Students table created');
 
+    // Add section column if it doesn't exist
+    try {
+      db.exec(`ALTER TABLE students ADD COLUMN section TEXT`);
+      console.log('✅ Section column added to students table');
+    } catch (e: any) {
+      // Column already exists, ignore
+      if (!e.message?.includes('duplicate column')) {
+        console.log('Section column already exists');
+      }
+    }
+
     // Create indexes
     db.exec('CREATE INDEX IF NOT EXISTS idx_student_id ON students(student_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_student_type ON students(student_type)');
@@ -339,6 +350,61 @@ async function setupDatabase() {
     db.exec('CREATE INDEX IF NOT EXISTS idx_installment_student ON installment_payments(student_id)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_installment_status ON installment_payments(status)');
 
+    // Migration: Add amount_paid column to installment_payments if it doesn't exist
+    try {
+      db.exec("ALTER TABLE installment_payments ADD COLUMN amount_paid REAL DEFAULT 0.00");
+      console.log('✅ Added amount_paid column to installment_payments');
+    } catch (e: any) {
+      // Column already exists
+      console.log('ℹ️  amount_paid column already exists or other migration issue:', e.message);
+    }
+
+    // Verify the column exists by checking pragma
+    try {
+      const columns = db.prepare("PRAGMA table_info(installment_payments)").all();
+      const hasAmountPaid = (columns as any[]).some(col => col.name === 'amount_paid');
+      if (!hasAmountPaid) {
+        console.warn('⚠️  amount_paid column not found, attempting to add it...');
+        db.exec("ALTER TABLE installment_payments ADD COLUMN amount_paid REAL DEFAULT 0.00");
+        console.log('✅ Successfully added amount_paid column');
+      }
+    } catch (e: any) {
+      console.error('Failed to verify/add amount_paid column:', e);
+    }
+
+    // Migration: Add penalty_amount column to installment_payments if it doesn't exist
+    try {
+      db.exec("ALTER TABLE installment_payments ADD COLUMN penalty_amount REAL DEFAULT 0.00");
+      console.log('✅ Added penalty_amount column to installment_payments');
+    } catch (e: any) {
+      // Column already exists
+    }
+
+    // Migration: Add due_date column to installment_payments if it doesn't exist
+    try {
+      db.exec("ALTER TABLE installment_payments ADD COLUMN due_date TEXT");
+      console.log('✅ Added due_date column to installment_payments');
+    } catch (e: any) {
+      // Column already exists
+    }
+
+    // Migration: Fix enrollments stuck at 'For Payment' that have an approved down payment
+    try {
+      const fixed = db.prepare(`
+        UPDATE enrollments SET status = 'Enrolled', updated_at = datetime('now')
+        WHERE status IN ('For Payment', 'Payment Verification')
+        AND id IN (
+          SELECT DISTINCT enrollment_id FROM installment_payments 
+          WHERE period = 'Down Payment' AND status = 'Approved'
+        )
+      `).run();
+      if (fixed.changes > 0) {
+        console.log(`✅ Fixed ${fixed.changes} enrollment(s) stuck at For Payment -> Enrolled`);
+      }
+    } catch (e: any) {
+      // Ignore if tables don't exist yet
+    }
+
     // Create activity_logs table
     db.exec(`
       CREATE TABLE IF NOT EXISTS activity_logs (
@@ -359,19 +425,47 @@ async function setupDatabase() {
     db.exec('CREATE INDEX IF NOT EXISTS idx_user_activity ON activity_logs(user_id, created_at)');
     db.exec('CREATE INDEX IF NOT EXISTS idx_entity ON activity_logs(entity_type, entity_id)');
 
-    // Create notifications table to track per-user read status for activity logs
+    // Create notifications table for enrollment status updates
     db.exec(`
       CREATE TABLE IF NOT EXISTS notifications (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        user_id INTEGER NOT NULL,
-        activity_log_id INTEGER NOT NULL,
+        student_id INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        message TEXT NOT NULL,
+        type TEXT DEFAULT 'info',
         is_read INTEGER DEFAULT 0,
         created_at TEXT DEFAULT (datetime('now')),
-        FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
-        FOREIGN KEY (activity_log_id) REFERENCES activity_logs(id) ON DELETE CASCADE
+        FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
       )
     `);
-    db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, is_read)');
+    db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_student ON notifications(student_id, is_read)');
+
+    // Migration: Recreate notifications table if it has old schema (user_id + activity_log_id)
+    try {
+      const cols = db.pragma('table_info(notifications)') as any[];
+      const hasStudentId = cols.some((c: any) => c.name === 'student_id');
+      const hasTitle = cols.some((c: any) => c.name === 'title');
+      if (!hasStudentId || !hasTitle) {
+        console.log('Migrating notifications table to new schema...');
+        db.exec('DROP TABLE IF EXISTS notifications');
+        db.exec(`
+          CREATE TABLE notifications (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            student_id INTEGER NOT NULL,
+            title TEXT NOT NULL,
+            message TEXT NOT NULL,
+            type TEXT DEFAULT 'info',
+            is_read INTEGER DEFAULT 0,
+            created_at TEXT DEFAULT (datetime('now')),
+            FOREIGN KEY (student_id) REFERENCES students(id) ON DELETE CASCADE
+          )
+        `);
+        db.exec('CREATE INDEX IF NOT EXISTS idx_notifications_student ON notifications(student_id, is_read)');
+        console.log('✅ Notifications table migrated successfully');
+      }
+    } catch (e) {
+      console.error('Notifications migration check error:', e);
+    }
 
     // Create faculty table (not users, just records)
     db.exec(`
@@ -871,6 +965,17 @@ async function setupDatabase() {
 
     insertManySampleStudents(sampleStudentData);
     console.log('✅ Sample students created');
+
+    // Seed sections (Section 1 and Section 2)
+    db.exec(`
+      INSERT OR IGNORE INTO sections (section_code, section_name, course, year_level, school_year, semester, status)
+      VALUES ('1', 'Section 1', 'BSCS', 1, '2024-2025', '1st', 'Active');
+    `);
+    db.exec(`
+      INSERT OR IGNORE INTO sections (section_code, section_name, course, year_level, school_year, semester, status)
+      VALUES ('2', 'Section 2', 'BSCS', 1, '2024-2025', '1st', 'Active');
+    `);
+    console.log('✅ Sections seeded (Section 1, Section 2)');
 
     console.log('\n🎉 Database setup completed successfully!');
     console.log('\nDefault credentials:');

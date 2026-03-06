@@ -284,3 +284,83 @@ export const getDeanDashboardStats = async (req: AuthRequest, res: Response) => 
     });
   }
 };
+
+// Assign teacher to section
+export const assignTeacherToSection = async (req: AuthRequest, res: Response) => {
+  try {
+    const { teacherId, sectionId } = req.body;
+
+    if (!teacherId) {
+      return res.status(400).json({
+        success: false,
+        message: 'Teacher ID is required'
+      });
+    }
+
+    // Check that the faculty member exists
+    const faculty = await query('SELECT * FROM faculty WHERE id = ?', [teacherId]);
+    if (faculty.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Faculty member not found'
+      });
+    }
+
+    // Ensure sections exist (create Section 1 and Section 2 if missing)
+    const existingSections = await query('SELECT COUNT(*) as count FROM sections');
+    if (existingSections[0]?.count === 0) {
+      await run(
+        `INSERT OR IGNORE INTO sections (section_code, section_name, course, year_level, school_year, semester, status)
+         VALUES ('1', 'Section 1', 'BSCS', 1, '2024-2025', '1st', 'Active')`,
+        []
+      );
+      await run(
+        `INSERT OR IGNORE INTO sections (section_code, section_name, course, year_level, school_year, semester, status)
+         VALUES ('2', 'Section 2', 'BSCS', 1, '2024-2025', '1st', 'Active')`,
+        []
+      );
+    }
+
+    // If 'none', remove this teacher from any section they are adviser of
+    if (!sectionId || sectionId === 'none') {
+      await run(
+        'UPDATE sections SET adviser_id = NULL, updated_at = datetime(\'now\') WHERE adviser_id = ?',
+        [teacherId]
+      );
+      return res.json({
+        success: true,
+        message: 'Teacher unassigned from section'
+      });
+    }
+
+    // First, remove this teacher from any other section
+    await run(
+      'UPDATE sections SET adviser_id = NULL, updated_at = datetime(\'now\') WHERE adviser_id = ?',
+      [teacherId]
+    );
+
+    // Then assign to the new section
+    const result = await run(
+      'UPDATE sections SET adviser_id = ?, updated_at = datetime(\'now\') WHERE section_code = ?',
+      [teacherId, sectionId]
+    );
+
+    if (result.changes === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Section not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Teacher assigned to Section ${sectionId} successfully`
+    });
+  } catch (error) {
+    console.error('Assign teacher to section error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Server error'
+    });
+  }
+};

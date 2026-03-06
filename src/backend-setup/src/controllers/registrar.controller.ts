@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import db, { query, run, get } from '../database/connection';
 import { AuthRequest } from '../middleware/auth.middleware';
+import { sendEnrollmentNotification } from '../utils/notification.helper';
 
 // Helper: get fee rates for a course from courses_fees table, with safe defaults
 const getCourseFeeRates = async (course: string) => {
@@ -430,6 +431,9 @@ export const approveSubjectAssessment = async (req: AuthRequest, res: Response) 
        WHERE id = ?`,
       [tuitionFee, regFee, libFee, labFee, idFee, otherFees, totalAmount, userId, remarks || null, new Date().toISOString(), new Date().toISOString(), id]
     );
+
+    // Send notification
+    await sendEnrollmentNotification(enrollments[0].student_id, parseInt(id as string), 'Cashier Review');
 
     // Log activity
     await run(

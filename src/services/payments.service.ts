@@ -10,9 +10,14 @@ export const listPayments = async (studentId: string) => {
   return res.data;
 };
 
+export const getApprovedPayments = async (studentId: string) => {
+  const res = await api.get(`/payments/approved/${studentId}`);
+  return res.data;
+};
+
 export const addPayment = async (studentId: string, payload: any) => {
   const res = await api.post(`/payments/student/${studentId}`, payload);
   return res.data;
 };
 
-export default { getAssessment, listPayments, addPayment };
+export default { getAssessment, listPayments, getApprovedPayments, addPayment };

@@ -13,6 +13,7 @@ import {
   XCircle,
   Clock,
   AlertCircle,
+  AlertTriangle,
   Download,
   FileText,
   Eye,
@@ -28,7 +29,9 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from './ui/dialog';
+import { Label } from './ui/label';
 import React from 'react';
 
 const PesoIcon = (props: any) => (
@@ -60,6 +63,9 @@ export default function CashierDashboard({ onLogout }: CashierDashboardProps) {
   const [loadingInstallments, setLoadingInstallments] = useState(false);
   const [rejectingPaymentId, setRejectingPaymentId] = useState<number | null>(null);
   const [rejectReason, setRejectReason] = useState('');
+  const [penaltyPaymentId, setPenaltyPaymentId] = useState<number | null>(null);
+  const [penaltyAmount, setPenaltyAmount] = useState('');
+  const [penaltyReason, setPenaltyReason] = useState('');
   const [enrollmentReviews, setEnrollmentReviews] = useState<any[]>([]);
   const [loadingReviews, setLoadingReviews] = useState(false);
   const [editingEnrollmentId, setEditingEnrollmentId] = useState<number | null>(null);
@@ -157,12 +163,24 @@ export default function CashierDashboard({ onLogout }: CashierDashboardProps) {
         setLoadingPending(true);
         const resp = await cashierService.listPending();
         if (!mounted) return;
-        setPendingTransactions(resp?.data || resp || []);
         
-        // Also load installment payments
+        // Load installment payments separately
         const installmentResp = await cashierService.getInstallmentPayments({ status: 'Pending' });
+        const installments = installmentResp?.data || installmentResp || [];
+        
+        // Create a set of (studentId, period) tuples to identify installment payments
+        const installmentSet = new Set(installments.map((ip: any) => `${ip.student_id}|${ip.period}`));
+        
+        // Filter out installment payments from regular pending transactions
+        // Installments have a 'period' field, so exclude those
+        const regularPending = (resp?.data || resp || []).filter((pt: any) => {
+          const key = `${pt.student_id}|${pt.period}`;
+          return !installmentSet.has(key) && !pt.period;
+        });
+        
         if (mounted) {
-          setInstallmentPayments(installmentResp?.data || installmentResp || []);
+          setPendingTransactions(regularPending);
+          setInstallmentPayments(installments);
         }
       } catch (err) {
         console.error('Failed loading pending transactions', err);
@@ -420,7 +438,7 @@ export default function CashierDashboard({ onLogout }: CashierDashboardProps) {
                             </Badge>
                           </div>
                           <p className="text-sm text-slate-500">
-                            {tx.course || 'N/A'} • Year {tx.year_level || 'N/A'} • {tx.school_year} {tx.semester} Sem
+                            {tx.course || 'N/A'} • Year {tx.year_level || 'N/A'}{tx.section ? ` • Section ${tx.section}` : ''} • {tx.school_year} {tx.semester} Sem
                           </p>
                           <p className="text-xs text-slate-600">
                             Outstanding: ₱{(tx.outstanding_balance ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
@@ -699,7 +717,7 @@ export default function CashierDashboard({ onLogout }: CashierDashboardProps) {
                         <div>
                           <p className="font-semibold text-slate-900">{enrollment.student_name}</p>
                           <p className="text-sm text-slate-600">
-                            {enrollment.student_id} • {enrollment.course} • Year {enrollment.year_level}
+                            {enrollment.student_id} • {enrollment.course} • Year {enrollment.year_level}{enrollment.section ? ` • Section ${enrollment.section}` : ''}
                           </p>
                           <p className="text-xs text-slate-500 mt-0.5">
                             {enrollment.school_year} • {enrollment.semester} Semester • {enrollment.subject_count || 0} subjects
@@ -968,11 +986,23 @@ export default function CashierDashboard({ onLogout }: CashierDashboardProps) {
       try {
         setLoadingPending(true);
         const resp = await cashierService.listPending();
-        setPendingTransactions(resp?.data || resp || []);
         
-        // Also refresh installment payments
+        // Load installment payments separately
         const installmentResp = await cashierService.getInstallmentPayments({ status: 'Pending' });
-        setInstallmentPayments(installmentResp?.data || installmentResp || []);
+        const installments = installmentResp?.data || installmentResp || [];
+        
+        // Create a set of (studentId, period) tuples to identify installment payments
+        const installmentSet = new Set(installments.map((ip: any) => `${ip.student_id}|${ip.period}`));
+        
+        // Filter out installment payments from regular pending transactions
+        // Installments have a 'period' field, so exclude those
+        const regularPending = (resp?.data || resp || []).filter((pt: any) => {
+          const key = `${pt.student_id}|${pt.period}`;
+          return !installmentSet.has(key) && !pt.period;
+        });
+        
+        setPendingTransactions(regularPending);
+        setInstallmentPayments(installments);
       } catch (err) {
         console.error('Failed refreshing pending', err);
       } finally {
@@ -1009,6 +1039,25 @@ export default function CashierDashboard({ onLogout }: CashierDashboardProps) {
       }
     };
 
+    const handleAddPenalty = async () => {
+      const amount = parseFloat(penaltyAmount);
+      if (!amount || amount <= 0) {
+        alert('Please enter a valid penalty amount');
+        return;
+      }
+      if (!penaltyPaymentId) return;
+      try {
+        await cashierService.addInstallmentPenalty(penaltyPaymentId, amount, penaltyReason || undefined);
+        alert('Penalty added successfully');
+        setPenaltyPaymentId(null);
+        setPenaltyAmount('');
+        setPenaltyReason('');
+        await refreshPending();
+      } catch (err: any) {
+        alert(err.message || 'Failed to add penalty');
+      }
+    };
+
     return (
       <Card className="border-0 shadow-lg">
         <div className="p-6">
@@ -1027,72 +1076,136 @@ export default function CashierDashboard({ onLogout }: CashierDashboardProps) {
               <p className="text-sm text-slate-500 ml-7">No pending installment payments.</p>
             ) : (
               <div className="space-y-3 ml-7">
-                {installmentPayments.map((ip: any) => (
-                  <div key={ip.id} className="border rounded-lg p-4 bg-orange-50 border-orange-200">
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <p className="text-sm font-medium">{ip.student_name} • {ip.student_id}</p>
-                        <p className="text-xs text-slate-500">{ip.course} • Year {ip.year_level} • {ip.school_year} {ip.semester}</p>
-                        <div className="mt-2 space-y-1">
-                          <p className="text-sm text-slate-700">Period: <span className="font-semibold">{ip.period}</span></p>
-                          <p className="text-sm text-slate-700">Amount: <span className="font-semibold">₱{(ip.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></p>
-                          <p className="text-xs text-slate-500">Payment Method: {ip.payment_method}</p>
-                          {ip.reference_number && <p className="text-xs text-slate-500">Reference: {ip.reference_number}</p>}
+                {installmentPayments.map((ip: any) => {
+                  const totalTuition = ip.total_amount || 0;
+                  const amountPaid = ip.amount_paid || 0;
+                  const penaltyAmt = ip.penalty_amount || 0;
+
+                  // Detect if this is a penalty fee payment (period ends with "- Late Penalty Fee")
+                  const isPenaltyPayment = ip.period && ip.period.includes('- Late Penalty Fee');
+                  const displayPeriod = isPenaltyPayment ? ip.period.replace(' - Late Penalty Fee', '') : ip.period;
+
+                  // For penalty payments, show penalty amount as the total due and balance
+                  const displayAmountDue = isPenaltyPayment ? penaltyAmt : totalTuition;
+                  const balance = isPenaltyPayment
+                    ? Math.max(penaltyAmt - amountPaid, 0)
+                    : Math.max(totalTuition - amountPaid + penaltyAmt, 0);
+
+                  // Determine due date and if payment is late
+                  // Each period is 1 month from enrollment date
+                  // Down Payment = enrollment date, Prelim = +1mo, Midterm = +2mo, Finals = +3mo
+                  const enrollDate = new Date(ip.enrollment_date || ip.enrollment_created_at || ip.created_at);
+                  const periodMonthOffset: Record<string, number> = {
+                    'Down Payment': 0,
+                    'Prelim': 1,
+                    'Midterm': 2,
+                    'Finals': 3
+                  };
+                  const offset = periodMonthOffset[ip.period] ?? 1;
+                  const dueDate = new Date(enrollDate);
+                  dueDate.setMonth(dueDate.getMonth() + offset);
+                  const now = new Date();
+                  const isLate = now > dueDate && ip.status !== 'Approved';
+                  const daysLate = isLate ? Math.floor((now.getTime() - dueDate.getTime()) / (1000 * 60 * 60 * 24)) : 0;
+
+                  return (
+                    <div key={ip.id} className={`border rounded-lg p-4 ${isLate ? 'bg-red-50 border-red-300' : 'bg-orange-50 border-orange-200'}`}>
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium">{ip.student_name} • {ip.student_id}</p>
+                            {isLate && (
+                              <Badge className="bg-red-100 text-red-700 border-0 text-[10px] px-2">
+                                <AlertTriangle className="h-3 w-3 mr-1" />
+                                {daysLate} day{daysLate !== 1 ? 's' : ''} overdue
+                              </Badge>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500">{ip.course} • Year {ip.year_level} • {ip.school_year} {ip.semester}</p>
+                          <div className="mt-2 space-y-1">
+                            <p className="text-sm text-slate-700">Period: <span className="font-semibold">{displayPeriod}</span>
+                              {isPenaltyPayment && (
+                                <Badge className="ml-2 bg-red-100 text-red-700 border-0 text-[10px] px-2">Penalty Fee Payment</Badge>
+                              )}
+                            </p>
+                            <p className="text-xs text-slate-500">Due Date: <span className={`font-medium ${isLate ? 'text-red-600' : 'text-slate-700'}`}>{dueDate.toLocaleDateString('en-US', { year: 'numeric', month: 'short', day: 'numeric' })}</span></p>
+                            <p className="text-sm text-slate-700">{isPenaltyPayment ? 'Penalty Fee Due' : 'Total Amount Due'}: <span className="font-semibold">₱{displayAmountDue.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></p>
+                            <p className="text-sm text-slate-700">Amount Paid: <span className="font-semibold text-green-700">₱{amountPaid.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></p>
+                            {penaltyAmt > 0 && !isPenaltyPayment && (
+                              <p className="text-sm text-red-700 font-medium">Late Payment Penalty: <span className="font-semibold">₱{penaltyAmt.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></p>
+                            )}
+                            <p className="text-sm text-slate-700">{isPenaltyPayment ? 'Penalty Balance' : 'Outstanding Balance'}: <span className={`font-semibold ${balance > 0 ? 'text-orange-700' : 'text-green-700'}`}>₱{balance.toLocaleString('en-US', { minimumFractionDigits: 2 })}</span></p>
+                            <p className="text-xs text-slate-500">Payment Method: {ip.payment_method}</p>
+                            {ip.reference_number && <p className="text-xs text-slate-500">Reference: {ip.reference_number}</p>}
+                          </div>
                         </div>
-                      </div>
-                      <div className="flex flex-col gap-2">
-                        {rejectingPaymentId === ip.id ? (
-                          <div className="w-48 space-y-2 border rounded-lg p-2 bg-white">
-                            <textarea
-                              placeholder="Enter rejection reason..."
-                              className="w-full text-xs p-2 border rounded"
-                              value={rejectReason}
-                              onChange={(e) => setRejectReason(e.target.value)}
-                              rows={3}
-                            />
-                            <div className="flex gap-2">
-                              <Button
+                        <div className="flex flex-col gap-2">
+                          {rejectingPaymentId === ip.id ? (
+                            <div className="w-48 space-y-2 border rounded-lg p-2 bg-white">
+                              <textarea
+                                placeholder="Enter rejection reason..."
+                                className="w-full text-xs p-2 border rounded"
+                                value={rejectReason}
+                                onChange={(e) => setRejectReason(e.target.value)}
+                                rows={3}
+                              />
+                              <div className="flex gap-2">
+                                <Button
+                                  size="sm"
+                                  variant="destructive"
+                                  onClick={() => handleRejectInstallment(ip.id)}
+                                >
+                                  Confirm
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => {
+                                    setRejectingPaymentId(null);
+                                    setRejectReason('');
+                                  }}
+                                >
+                                  Cancel
+                                </Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                                <Button
                                 size="sm"
-                                variant="destructive"
-                                onClick={() => handleRejectInstallment(ip.id)}
+                                onClick={() => handleApproveInstallment(ip.id)}
                               >
-                                Confirm
+                                <CheckCircle className="h-4 w-4 mr-2" />
+                                Approve
                               </Button>
                               <Button
                                 size="sm"
                                 variant="outline"
+                                className="!text-amber-700 hover:!bg-amber-50 !border-amber-300"
                                 onClick={() => {
-                                  setRejectingPaymentId(null);
-                                  setRejectReason('');
+                                  setPenaltyPaymentId(ip.id);
+                                  setPenaltyAmount('');
+                                  setPenaltyReason(isLate ? `Late payment - ${daysLate} day(s) overdue` : '');
                                 }}
                               >
-                                Cancel
+                                <AlertTriangle className="h-4 w-4 mr-2" />
+                                Add Penalty
                               </Button>
-                            </div>
-                          </div>
-                        ) : (
-                          <>
-                            <Button
-                              size="sm"
-                              onClick={() => handleApproveInstallment(ip.id)}
-                            >
-                              <CheckCircle className="h-4 w-4 mr-2" />
-                              Approve
-                            </Button>
-                            <Button
-                              size="sm"
-                              variant="destructive"
-                              onClick={() => setRejectingPaymentId(ip.id)}
-                            >
-                              <XCircle className="h-4 w-4 mr-2" />
-                              Reject
-                            </Button>
-                          </>
-                        )}
+                              <Button
+                                size="sm"
+                                variant="destructive"
+                                onClick={() => setRejectingPaymentId(ip.id)}
+                              >
+                                <XCircle className="h-4 w-4 mr-2" />
+                                Reject
+                              </Button>
+                            </>
+                          )}
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1163,6 +1276,52 @@ export default function CashierDashboard({ onLogout }: CashierDashboardProps) {
             )}
           </div>
         </div>
+
+        {/* Add Penalty Dialog */}
+        <Dialog open={penaltyPaymentId !== null} onOpenChange={(open) => { if (!open) { setPenaltyPaymentId(null); setPenaltyAmount(''); setPenaltyReason(''); } }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-amber-700">
+                <AlertTriangle className="h-5 w-5" />
+                Add Penalty
+              </DialogTitle>
+              <DialogDescription>
+                Add a penalty fee to this installment payment. The penalty amount will be added to the student's balance.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <div className="space-y-2">
+                <Label htmlFor="penalty-amount" className="text-sm font-medium">Penalty Amount (₱)</Label>
+                <Input
+                  id="penalty-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="Enter penalty amount"
+                  value={penaltyAmount}
+                  onChange={(e) => setPenaltyAmount(e.target.value)}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="penalty-reason" className="text-sm font-medium">Reason (optional)</Label>
+                <Input
+                  id="penalty-reason"
+                  placeholder="e.g. Late payment penalty"
+                  value={penaltyReason}
+                  onChange={(e) => setPenaltyReason(e.target.value)}
+                />
+              </div>
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => { setPenaltyPaymentId(null); setPenaltyAmount(''); setPenaltyReason(''); }}>
+                Cancel
+              </Button>
+              <Button className="!bg-amber-600 hover:!bg-amber-700 !text-white" onClick={handleAddPenalty}>
+                Add Penalty
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </Card>
     );
   };

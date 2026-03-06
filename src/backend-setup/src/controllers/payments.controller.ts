@@ -55,6 +55,36 @@ export const listPayments = (req: Request, res: Response) => {
   res.json({ success: true, data: all.filter((p: any) => p.studentId === studentId) });
 };
 
+export const getApprovedPayments = async (req: Request, res: Response) => {
+  try {
+    const { studentId } = req.params;
+
+    // Get the student's internal ID
+    const studentRows = await query(`SELECT id FROM students WHERE student_id = ? LIMIT 1`, [studentId]);
+    const student = studentRows && studentRows[0] ? studentRows[0] : null;
+    
+    if (!student) {
+      return res.json({ success: true, data: [] });
+    }
+
+    // Get approved installment payments from the database
+    const approvedPayments = await query(
+      `SELECT ip.*, s.student_id, e.total_amount
+       FROM installment_payments ip
+       LEFT JOIN students s ON ip.student_id = s.id
+       LEFT JOIN enrollments e ON ip.enrollment_id = e.id
+       WHERE ip.student_id = ? AND ip.status = 'Approved'
+       ORDER BY ip.created_at DESC`,
+      [student.id]
+    );
+
+    res.json({ success: true, data: approvedPayments || [] });
+  } catch (err) {
+    console.error('Failed to get approved payments:', err);
+    res.status(500).json({ success: false, message: 'Failed to get approved payments' });
+  }
+};
+
 export const addPayment = (req: Request, res: Response) => {
   const { studentId } = req.params;
   const { amount, method, reference } = req.body;
@@ -67,7 +97,9 @@ export const addPayment = (req: Request, res: Response) => {
 
 export const submitInstallmentPayment = async (req: Request, res: Response) => {
   try {
-    const { enrollmentId, studentId, amount, period, paymentMethod, referenceNumber, receiptPath } = req.body;
+    const { enrollmentId, studentId, amount, amountPaid, period, paymentMethod, referenceNumber, receiptPath } = req.body;
+
+    console.log('submitInstallmentPayment received:', { enrollmentId, studentId, amount, amountPaid, period, paymentMethod, referenceNumber, receiptPath });
 
     // Validate required fields
     if (!enrollmentId || !studentId || !amount || !period || !paymentMethod) {
@@ -77,13 +109,42 @@ export const submitInstallmentPayment = async (req: Request, res: Response) => {
       });
     }
 
-    // Create the installment payment record
-    const result = await run(
-      `INSERT INTO installment_payments 
-       (enrollment_id, student_id, amount, period, status, payment_method, reference_number, receipt_path, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
-      [enrollmentId, studentId, amount, period, 'Pending', paymentMethod, referenceNumber || null, receiptPath || null]
+    // amount = installment amount for this period
+    // amountPaid = actual amount student paid (may be different from amount)
+    const actualAmountPaid = amountPaid || amount;
+    console.log('actualAmountPaid to store:', actualAmountPaid);
+
+    // Check if there's an existing rejected payment for this period that can be resubmitted
+    const existingPayment = await query(
+      `SELECT id FROM installment_payments 
+       WHERE enrollment_id = ? AND student_id = ? AND period = ? AND status = 'Rejected'
+       LIMIT 1`,
+      [enrollmentId, studentId, period]
     );
+
+    let paymentId: number;
+
+    if (existingPayment && existingPayment.length > 0) {
+      // Update the existing rejected payment instead of creating a duplicate
+      await run(
+        `UPDATE installment_payments SET 
+         amount = ?, amount_paid = ?, status = 'Pending', 
+         payment_method = ?, reference_number = ?, receipt_path = ?,
+         updated_at = datetime('now')
+         WHERE id = ?`,
+        [amount, actualAmountPaid, paymentMethod, referenceNumber || null, receiptPath || null, existingPayment[0].id]
+      );
+      paymentId = existingPayment[0].id;
+    } else {
+      // Create the installment payment record with both amount and amount_paid
+      const result = await run(
+        `INSERT INTO installment_payments 
+         (enrollment_id, student_id, amount, amount_paid, period, status, payment_method, reference_number, receipt_path, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))`,
+        [enrollmentId, studentId, amount, actualAmountPaid, period, 'Pending', paymentMethod, referenceNumber || null, receiptPath || null]
+      );
+      paymentId = result.lastID;
+    }
 
     // Update enrollment status to Payment Verification
     await run(
@@ -94,10 +155,14 @@ export const submitInstallmentPayment = async (req: Request, res: Response) => {
       [enrollmentId]
     );
 
+    // Send notification
+    const { sendEnrollmentNotification } = require('../utils/notification.helper');
+    await sendEnrollmentNotification(studentId, enrollmentId, 'Payment Verification');
+
     res.json({ 
       success: true, 
       message: 'Installment payment submitted for approval',
-      paymentId: result.lastID 
+      paymentId: paymentId 
     });
   } catch (err) {
     console.error('Failed to submit installment payment:', err);
@@ -215,4 +280,4 @@ export const updateInstallmentPaymentStatus = async (req: Request, res: Response
   }
 };
 
-export default { getAssessment, listPayments, addPayment, submitInstallmentPayment, getInstallmentSchedule, getAllInstallmentPayments, updateInstallmentPaymentStatus };
+export default { getAssessment, listPayments, getApprovedPayments, addPayment, submitInstallmentPayment, getInstallmentSchedule, getAllInstallmentPayments, updateInstallmentPaymentStatus };

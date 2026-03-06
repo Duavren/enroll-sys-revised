@@ -35,7 +35,7 @@ router.get('/students', authenticate, authorize('admin', 'superadmin', 'dean', '
 router.get('/students/:id', authenticate, authorize('admin', 'superadmin', 'dean', 'registrar'), getStudentById);
 router.post('/students', authenticate, authorize('admin', 'superadmin'), createStudent);
 router.put('/students/:id', authenticate, authorize('admin', 'superadmin', 'registrar'), updateStudent);
-router.delete('/students/:id', authenticate, authorize('superadmin'), deleteStudent);
+router.delete('/students/:id', authenticate, authorize('admin', 'superadmin'), deleteStudent);
 
 // Account Requests
 router.get('/account-requests', authenticate, authorize('admin', 'superadmin'), getPendingAccountRequests);

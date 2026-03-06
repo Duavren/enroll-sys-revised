@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { query, run } from '../database/connection';
 import { AuthRequest } from '../middleware/auth.middleware';
+import { sendEnrollmentNotification } from '../utils/notification.helper';
 
 export const listPendingTransactions = async (req: AuthRequest, res: Response) => {
   try {
@@ -32,7 +33,13 @@ export const listPendingTransactions = async (req: AuthRequest, res: Response) =
        JOIN enrollments e ON t.enrollment_id = e.id
        JOIN students s ON e.student_id = s.id
        LEFT JOIN documents d ON d.enrollment_id = e.id AND d.document_type = 'payment_receipt'
-       WHERE 1=1`;
+       WHERE 1=1
+       AND NOT EXISTS (
+         SELECT 1 FROM installment_payments ip 
+         WHERE ip.enrollment_id = t.enrollment_id 
+         AND ip.student_id = e.student_id 
+         AND ip.status = 'Pending'
+       )`;
     const params: any[] = [];
 
     sql += ' AND t.status = ?';
@@ -122,6 +129,8 @@ export const processTransaction = async (req: AuthRequest, res: Response) => {
       // Mark enrollment as Enrolled if it's an enrollment transaction
       if (txInfo?.enrollment_id) {
         await run(`UPDATE enrollments SET status = 'Enrolled', updated_at = datetime('now') WHERE id = ?`, [txInfo.enrollment_id]);
+        // Send notification to student
+        await sendEnrollmentNotification(txInfo.student_id, txInfo.enrollment_id, 'Enrolled');
       }
 
       // Generate a simple official receipt file and save to uploads/documents
@@ -192,6 +201,8 @@ export const processTransaction = async (req: AuthRequest, res: Response) => {
       // Update enrollment status back to "For Payment" so student can resubmit
       if (txInfo?.enrollment_id) {
         await run(`UPDATE enrollments SET status = 'For Payment', updated_at = datetime('now') WHERE id = ?`, [txInfo.enrollment_id]);
+        // Send notification to student
+        await sendEnrollmentNotification(txInfo.student_id, txInfo.enrollment_id, 'For Payment');
       }
 
       // Log activity
@@ -279,6 +290,9 @@ export const approveTuitionAssessment = async (req: AuthRequest, res: Response) 
       [userId, id]
     );
 
+    // Send notification to student
+    await sendEnrollmentNotification(enrollments[0].student_id, id, 'Ready for Payment');
+
     await run(
       'INSERT INTO activity_logs (user_id, action, entity_type, entity_id, description) VALUES (?, ?, ?, ?, ?)',
       [userId, 'CASHIER_APPROVE_ASSESSMENT', 'enrollment', id, 'Cashier approved tuition assessment']
@@ -303,7 +317,9 @@ export const listInstallmentPayments = async (req: AuthRequest, res: Response) =
         s.year_level,
         e.school_year,
         e.semester,
-        e.total_amount
+        e.total_amount,
+        e.enrollment_date,
+        e.created_at as enrollment_created_at
       FROM installment_payments ip
       JOIN students s ON ip.student_id = s.id
       JOIN enrollments e ON ip.enrollment_id = e.id
@@ -373,12 +389,35 @@ export const approveInstallmentPayment = async (req: AuthRequest, res: Response)
       [paymentId]
     );
 
+    // If this is a penalty fee payment, clear the penalty_amount on the original period record
+    const isPenaltyPayment = payment.period && payment.period.includes('- Late Penalty Fee');
+    if (isPenaltyPayment) {
+      const originalPeriod = payment.period.replace(' - Late Penalty Fee', '');
+      await run(
+        `UPDATE installment_payments 
+         SET penalty_amount = 0, updated_at = datetime('now') 
+         WHERE enrollment_id = ? AND period = ? AND period NOT LIKE '%Late Penalty Fee%'`,
+        [payment.enrollment_id, originalPeriod]
+      );
+    }
+
     // Update enrollment status to Enrolled for all approved installment payments
     await run(
       `UPDATE enrollments 
        SET status = 'Enrolled', approved_by = ?, approved_at = datetime('now'), updated_at = datetime('now')
        WHERE id = ?`,
       [userId, payment.enrollment_id]
+    );
+
+    // Send notification to student about installment approval
+    const notificationMsg = isPenaltyPayment
+      ? `Your late penalty fee for ${payment.period.replace(' - Late Penalty Fee', '')} has been approved. You may now proceed with the next period payment.`
+      : `Your ${payment.period} payment has been approved. Thank you!`;
+    await sendEnrollmentNotification(
+      payment.student_id, 
+      payment.enrollment_id, 
+      'Enrolled',
+      notificationMsg
     );
 
     // Log activity
@@ -404,12 +443,48 @@ export const rejectInstallmentPayment = async (req: AuthRequest, res: Response) 
       return res.status(401).json({ success: false, message: 'Unauthorized' });
     }
 
+    // Get the payment details first
+    const rows = await query(
+      `SELECT ip.*, e.student_id, e.id as enrollment_id 
+       FROM installment_payments ip
+       JOIN enrollments e ON ip.enrollment_id = e.id
+       WHERE ip.id = ?`,
+      [paymentId]
+    ) as any[];
+
+    const payment = rows?.[0];
+
+    if (!payment) {
+      return res.status(404).json({ success: false, message: 'Payment not found' });
+    }
+
     // Update payment status to Rejected with reason in notes
     await run(
       `UPDATE installment_payments 
        SET status = 'Rejected', notes = ?, updated_at = datetime('now') 
        WHERE id = ?`,
       [reason || '', paymentId]
+    );
+
+    // Ensure enrollment stays as 'Enrolled' so student sees the
+    // Remaining Installment Payments view and can resubmit the rejected period
+    await run(
+      `UPDATE enrollments 
+       SET status = 'Enrolled', updated_at = datetime('now')
+       WHERE id = ? AND status != 'Enrolled'`,
+      [payment.enrollment_id]
+    );
+
+    // Notify the student
+    await run(
+      `INSERT INTO notifications (student_id, title, message, type) 
+       VALUES (?, ?, ?, ?)`,
+      [
+        payment.student_id,
+        'Installment Payment Rejected',
+        `Your ${payment.period} payment has been rejected. Reason: ${reason || 'No reason provided'}. Please resubmit your payment.`,
+        'warning'
+      ]
     );
 
     // Log activity
@@ -541,6 +616,9 @@ export const approveEnrollmentReview = async (req: AuthRequest, res: Response) =
       [t, r, l, lb, i, o, totalAmount, remarks || enrollments[0].remarks || null, id]
     );
 
+    // Send notification
+    await sendEnrollmentNotification(enrollments[0].student_id, parseInt(id as string), 'For Dean Approval');
+
     // Log activity
     await run(
       'INSERT INTO activity_logs (user_id, action, entity_type, entity_id, description) VALUES (?, ?, ?, ?, ?)',
@@ -580,6 +658,9 @@ export const rejectEnrollmentReview = async (req: AuthRequest, res: Response) =>
        WHERE id = ?`,
       [remarks || 'Returned by cashier for fee adjustment', userId, id]
     );
+
+    // Send notification
+    await sendEnrollmentNotification(enrollments[0].student_id, parseInt(id as string), 'For Registrar Assessment');
 
     // Log activity
     await run(
@@ -730,4 +811,73 @@ export const updateFees = async (req: AuthRequest, res: Response) => {
   }
 };
 
-export default { listPendingTransactions, listTransactions, processTransaction, cashierReport, listTuitionAssessments, approveTuitionAssessment, listInstallmentPayments, approveInstallmentPayment, rejectInstallmentPayment, listEnrollmentsForReview, updateEnrollmentFees, approveEnrollmentReview, rejectEnrollmentReview, getFees, updateFees };
+export const addInstallmentPenalty = async (req: AuthRequest, res: Response) => {
+  try {
+    const { paymentId } = req.params;
+    const { penalty_amount, reason } = req.body;
+    const userId = req.user?.id;
+
+    if (!userId) {
+      return res.status(401).json({ success: false, message: 'Unauthorized' });
+    }
+
+    if (!penalty_amount || isNaN(penalty_amount) || penalty_amount <= 0) {
+      return res.status(400).json({ success: false, message: 'Please enter a valid penalty amount' });
+    }
+
+    // Get the installment payment
+    const paymentRows = await query(
+      `SELECT ip.*, e.total_amount, e.enrollment_date, e.created_at as enrollment_created_at
+       FROM installment_payments ip
+       JOIN enrollments e ON ip.enrollment_id = e.id
+       WHERE ip.id = ?`,
+      [paymentId]
+    );
+    const payment = paymentRows && paymentRows[0] ? paymentRows[0] : null;
+
+    if (!payment) {
+      return res.status(404).json({ success: false, message: 'Installment payment not found' });
+    }
+
+    // Update penalty_amount on the installment payment
+    const currentPenalty = payment.penalty_amount || 0;
+    const newPenalty = currentPenalty + parseFloat(penalty_amount);
+
+    await run(
+      `UPDATE installment_payments 
+       SET penalty_amount = ?, notes = COALESCE(notes, '') || ?  , updated_at = datetime('now') 
+       WHERE id = ?`,
+      [newPenalty, (payment.notes ? '\n' : '') + `Penalty ₱${parseFloat(penalty_amount).toFixed(2)}: ${reason || 'Late payment'}`, paymentId]
+    );
+
+    // Send notification to student directly (not using sendEnrollmentNotification since period is not a status)
+    try {
+      await run(
+        `INSERT INTO notifications (student_id, title, message, type, is_read, created_at)
+         VALUES (?, ?, ?, ?, 0, datetime('now'))`,
+        [
+          payment.student_id,
+          'Late Payment Penalty Added',
+          `A late payment penalty of ₱${parseFloat(penalty_amount).toFixed(2)} has been added to your ${payment.period} installment. Reason: ${reason || 'Late payment'}. Please settle the additional amount.`,
+          'warning'
+        ]
+      );
+    } catch (notifErr) {
+      console.error('Failed to send penalty notification:', notifErr);
+      // Don't fail the whole operation for a notification error
+    }
+
+    // Log activity
+    await run(
+      'INSERT INTO activity_logs (user_id, action, entity_type, entity_id, description) VALUES (?, ?, ?, ?, ?)',
+      [userId, 'CASHIER_ADD_PENALTY', 'installment_payment', paymentId, `Added penalty ₱${parseFloat(penalty_amount).toFixed(2)} to ${payment.period}: ${reason || 'Late payment'}`]
+    );
+
+    res.json({ success: true, message: `Penalty of ₱${parseFloat(penalty_amount).toFixed(2)} added successfully`, penalty_amount: newPenalty });
+  } catch (error) {
+    console.error('Add installment penalty error:', error);
+    res.status(500).json({ success: false, message: 'Server error' });
+  }
+};
+
+export default { listPendingTransactions, listTransactions, processTransaction, cashierReport, listTuitionAssessments, approveTuitionAssessment, listInstallmentPayments, approveInstallmentPayment, rejectInstallmentPayment, listEnrollmentsForReview, updateEnrollmentFees, approveEnrollmentReview, rejectEnrollmentReview, getFees, updateFees, addInstallmentPenalty };

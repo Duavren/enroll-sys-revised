@@ -689,7 +689,7 @@ export default function RegistrarDashboard({ onLogout }: RegistrarDashboardProps
                         <div className="flex items-center justify-between mb-2">
                           <div>
                             <p className="text-sm text-slate-900">{request.student_name}</p>
-                            <p className="text-xs text-slate-500">{request.student_id} • {request.course}</p>
+                            <p className="text-xs text-slate-500">{request.student_id} • {request.course}{request.section ? ` • Sec ${request.section}` : ''}</p>
                           </div>
                           <Badge className={request.status === 'Approved' || request.status === 'Generated' ? 'bg-green-100 text-green-700 border-0 text-xs' : 'bg-orange-100 text-orange-700 border-0 text-xs'}>
                             {request.status}
@@ -798,7 +798,7 @@ export default function RegistrarDashboard({ onLogout }: RegistrarDashboardProps
                     <div className="flex items-center justify-between">
                       <div className="flex-1">
                         <h4 className="text-slate-900">{student.first_name} {student.last_name}</h4>
-                        <p className="text-sm text-slate-500">{student.student_id} • {student.course} • Year {student.year_level}</p>
+                        <p className="text-sm text-slate-500">{student.student_id} • {student.course} • Year {student.year_level}{student.section ? ` • Section ${student.section}` : ''}</p>
                         <div className="flex gap-2 mt-2">
                           <Badge className={student.clearance_status === 'Clear' ? 'bg-green-100 text-green-700 border-0' : 'bg-orange-100 text-orange-700 border-0'}>
                             {student.clearance_status || 'Clear'}
@@ -926,7 +926,7 @@ export default function RegistrarDashboard({ onLogout }: RegistrarDashboardProps
                       <div className="flex-1">
                         <h4 className="text-slate-900">{request.student_name}</h4>
                         <p className="text-sm text-slate-500">{request.cor_number || `COR-${request.id}`} • {request.student_id}</p>
-                        <p className="text-sm text-slate-600 mt-2">{request.course} • {request.semester}</p>
+                        <p className="text-sm text-slate-600 mt-2">{request.course} • {request.semester}{request.section ? ` • Section ${request.section}` : ''}</p>
                         <p className="text-xs text-slate-400 mt-1">{formatTimeAgo(request.created_at)}</p>
                       </div>
                       <Badge className={request.status === 'Approved' || request.status === 'Generated' ? 'bg-green-100 text-green-700 border-0' : 'bg-orange-100 text-orange-700 border-0'}>
@@ -1057,7 +1057,7 @@ export default function RegistrarDashboard({ onLogout }: RegistrarDashboardProps
                     <div className="flex items-start justify-between mb-3">
                       <div className="flex-1">
                         <h4 className="text-slate-900">{e.first_name} {e.last_name}</h4>
-                        <p className="text-sm text-slate-500">Enrollment #{e.id} • {e.school_year} • {e.semester}</p>
+                        <p className="text-sm text-slate-500">Enrollment #{e.id} • {e.school_year} • {e.semester}{e.section ? ` • Section ${e.section}` : ''}</p>
                         <p className="text-sm text-slate-600 mt-2">Status: {e.status}</p>
                         {e.status === 'For Admin Approval' && e.total_amount && (
                           <p className="text-sm text-green-700 font-medium mt-1">
@@ -1256,7 +1256,7 @@ export default function RegistrarDashboard({ onLogout }: RegistrarDashboardProps
           <DialogHeader>
             <DialogTitle>Enrollment Assessment</DialogTitle>
             <DialogDescription>
-              {selectedEnrollmentForAssess?.first_name} {selectedEnrollmentForAssess?.last_name} — {selectedEnrollmentForAssess?.course} Year {selectedEnrollmentForAssess?.year_level} • {selectedEnrollmentForAssess?.school_year} {selectedEnrollmentForAssess?.semester}
+              {selectedEnrollmentForAssess?.first_name} {selectedEnrollmentForAssess?.last_name} — {selectedEnrollmentForAssess?.course} Year {selectedEnrollmentForAssess?.year_level}{selectedEnrollmentForAssess?.section ? ` • Section ${selectedEnrollmentForAssess.section}` : ''} • {selectedEnrollmentForAssess?.school_year} {selectedEnrollmentForAssess?.semester}
             </DialogDescription>
           </DialogHeader>
 

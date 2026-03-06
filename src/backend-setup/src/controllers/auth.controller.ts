@@ -3,6 +3,7 @@ import bcrypt from 'bcryptjs';
 import jwt, { SignOptions, Secret } from 'jsonwebtoken';
 import { query, run, get } from '../database/connection';
 import { AuthRequest } from '../middleware/auth.middleware';
+import { sendLoginNotification } from '../utils/notification.helper';
 
 export const login = async (req: Request, res: Response) => {
   try {
@@ -67,6 +68,11 @@ export const login = async (req: Request, res: Response) => {
       'INSERT INTO activity_logs (user_id, action, description) VALUES (?, ?, ?)',
       [user.id, 'LOGIN', `User ${username} logged in`]
     );
+
+    // Send login notification for students
+    if (user.role === 'student') {
+      await sendLoginNotification(user.id);
+    }
 
     res.json({
       success: true,

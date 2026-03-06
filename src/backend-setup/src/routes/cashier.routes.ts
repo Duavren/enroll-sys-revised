@@ -13,6 +13,7 @@ router.put('/enrollments/:id/approve-assessment', authenticate, authorize('cashi
 router.get('/installment-payments', authenticate, authorize('cashier', 'registrar', 'superadmin', 'admin'), cashier.listInstallmentPayments);
 router.put('/installment-payments/:paymentId/approve', authenticate, authorize('cashier', 'registrar', 'superadmin'), cashier.approveInstallmentPayment);
 router.put('/installment-payments/:paymentId/reject', authenticate, authorize('cashier', 'registrar', 'superadmin'), cashier.rejectInstallmentPayment);
+router.put('/installment-payments/:paymentId/penalty', authenticate, authorize('cashier', 'superadmin'), cashier.addInstallmentPenalty);
 
 // Enrollment Review (Cashier reviews fees before Dean)
 router.get('/enrollment-reviews', authenticate, authorize('cashier', 'registrar', 'superadmin', 'admin'), cashier.listEnrollmentsForReview);

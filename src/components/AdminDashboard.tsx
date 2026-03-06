@@ -35,6 +35,7 @@ import { gradesService } from '../services/grades.service';
 import { maintenanceService } from '../services/maintenance.service';
 import analyticsService from '../services/analytics.service';
 import logsService from '../services/logs.service';
+import coursesService from '../services/courses.service';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
@@ -219,6 +220,11 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
   const [sections, setSections] = useState<any[]>([]);
   const [subjects, setSubjects] = useState<any[]>([]);
   const [schoolYears, setSchoolYears] = useState<any[]>([]);
+  const [courses, setCourses] = useState<any[]>([]);
+  const [studentTypes] = useState(['New', 'Transferee', 'Returning', 'Continuing', 'Scholar']);
+  const [semesters] = useState(['1st', '2nd', '3rd']);
+  const [selectedSchoolYearForSemester, setSelectedSchoolYearForSemester] = useState<any>(null);
+  const [activeSemestersInSY, setActiveSemestersInSY] = useState<string[]>([]);
   const [shsStudents, setShsStudents] = useState<any[]>([]);
   const [collegeStudents, setCollegeStudents] = useState<any[]>([]);
   const [shsGrades, setShsGrades] = useState<any[]>([]);
@@ -337,6 +343,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         const recent = enrollmentsData.data?.slice(0, 10).map((e: any) => ({
           name: `${e.first_name || ''} ${e.last_name || ''}`.trim(),
           course: e.course || 'N/A',
+          section: e.section || '',
           status: e.status,
           time: formatTimeAgo(e.created_at)
         })) || [];
@@ -474,6 +481,42 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
         if (teachersData.success) {
           setTeachers(teachersData.data || []);
         }
+      }
+
+      // Fetch courses
+      try {
+        const coursesData = await coursesService.listCourses();
+        const apiCourses = coursesData?.data || coursesData || [];
+        if (apiCourses.length > 0) {
+          setCourses(apiCourses);
+        } else {
+          // Fallback: derive courses from students already loaded, or fetch all students to extract
+          const allStudentsData = await adminService.getAllStudents();
+          const allStudents = allStudentsData?.data || [];
+          const seen = new Set<string>();
+          const derived: any[] = [];
+          for (const s of allStudents) {
+            const c = s.course;
+            if (c && c !== 'N/A' && !seen.has(c.toUpperCase())) {
+              seen.add(c.toUpperCase());
+              derived.push({ id: `derived-${c}`, program_code: c, program_name: c, description: '' });
+            }
+          }
+          setCourses(derived);
+        }
+      } catch (err) {
+        console.error('Failed to load courses from API, deriving from students', err);
+        // Fallback: extract unique courses from already-loaded students array
+        const seen = new Set<string>();
+        const derived: any[] = [];
+        for (const s of students) {
+          const c = s.course;
+          if (c && c !== 'N/A' && !seen.has(c.toUpperCase())) {
+            seen.add(c.toUpperCase());
+            derived.push({ id: `derived-${c}`, program_code: c, program_name: c, description: '' });
+          }
+        }
+        setCourses(derived);
       }
 
       // Fetch sections
@@ -1181,7 +1224,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       </div>
                       <div className="min-w-0 flex-1">
                         <p className="text-sm text-slate-900 truncate">{enrollment.name}</p>
-                        <p className="text-xs text-slate-500">{enrollment.course}</p>
+                        <p className="text-xs text-slate-500">{enrollment.course}{enrollment.section ? ` • Section ${enrollment.section}` : ''}</p>
                       </div>
                     </div>
                     <div className="text-right shrink-0 ml-2">
@@ -1222,7 +1265,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                           <AlertCircle className="h-3 w-3 text-red-500 shrink-0" />
                         )}
                       </div>
-                      <p className="text-xs text-slate-500">{pending.id} • {pending.course}</p>
+                      <p className="text-xs text-slate-500">{pending.id} • {pending.course}{pending.section ? ` • Section ${pending.section}` : ''}</p>
                     </div>
                     <div className="text-right shrink-0 ml-2">
                       <Button 
@@ -1277,7 +1320,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                       <h4 className="text-slate-900">{enr.student}</h4>
                       <Badge className={`border-0 text-xs ${getEnrollStatusColor(enr.status)}`}>{enr.status || 'Unknown'}</Badge>
                     </div>
-                    <p className="text-sm text-slate-500">{enr.id} • {enr.course} • {enr.type} • {enr.date}</p>
+                    <p className="text-sm text-slate-500">{enr.id} • {enr.course}{enr.section ? ` • Section ${enr.section}` : ''} • {enr.type} • {enr.date}</p>
                   </div>
                   <Button size="sm" variant="outline" onClick={() => openAdminEnrollView(enr)} className="gap-2">
                     <Eye className="h-4 w-4" /> View
@@ -1298,7 +1341,7 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
               <div>
                 <h2 className="text-lg font-semibold leading-tight">{selectedAdminEnroll?.student || 'Enrollment Details'}</h2>
                 <p className="text-slate-300 text-sm mt-0.5">
-                  {selectedAdminEnroll?.course} &nbsp;·&nbsp; {selectedAdminEnroll?.semester} Sem {selectedAdminEnroll?.school_year} &nbsp;·&nbsp; {selectedAdminEnroll?.type}
+                  {selectedAdminEnroll?.course}{selectedAdminEnroll?.section ? ` · Section ${selectedAdminEnroll.section}` : ''} &nbsp;·&nbsp; {selectedAdminEnroll?.semester} Sem {selectedAdminEnroll?.school_year} &nbsp;·&nbsp; {selectedAdminEnroll?.type}
                 </p>
               </div>
               {selectedAdminEnroll && (
@@ -2448,54 +2491,91 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
               {schoolYears.length === 0 ? (
                 <p className="text-center text-slate-500 py-8">No school years found</p>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-4">
                   {schoolYears.map((sy: any) => (
-                    <div key={sy.id} className="p-3 border rounded-lg flex items-center justify-between">
-                      <div>
-                        <p className="font-medium">{sy.school_year}</p>
-                        <p className="text-sm text-slate-500">
-                          {sy.start_date} to {sy.end_date}
-                          {sy.is_active === 1 && (
-                            <Badge className="ml-2 bg-green-100 text-green-700 border-0">Active</Badge>
-                          )}
-                        </p>
+                    <div key={sy.id} className="p-4 border rounded-lg">
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <p className="font-medium text-lg">{sy.school_year}</p>
+                          <p className="text-sm text-slate-500">
+                            {sy.start_date} to {sy.end_date}
+                            {sy.is_active === 1 && (
+                              <Badge className="ml-2 bg-green-100 text-green-700 border-0">Active</Badge>
+                            )}
+                          </p>
+                        </div>
+                        <div className="flex gap-2">
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            onClick={() => {
+                              setEditingSchoolYear(sy);
+                              setEditSchoolYearForm({
+                                school_year: sy.school_year || '',
+                                start_date: sy.start_date || '',
+                                end_date: sy.end_date || '',
+                                enrollment_start: sy.enrollment_start || '',
+                                enrollment_end: sy.enrollment_end || '',
+                                is_active: sy.is_active === 1
+                              });
+                              setEditSchoolYearOpen(true);
+                            }}
+                          >
+                            <Edit className="h-4 w-4 mr-1" />
+                            Edit
+                          </Button>
+                          <Button 
+                            size="sm" 
+                            variant="outline"
+                            className="text-red-600 hover:bg-red-50"
+                            onClick={async () => {
+                              try {
+                                await maintenanceService.deleteSchoolYear(sy.id);
+                                fetchDashboardData();
+                              } catch (err: any) {
+                                setError(err.message || 'Failed to delete school year');
+                              }
+                            }}
+                          >
+                            <Trash2 className="h-4 w-4 mr-1" />
+                            Delete
+                          </Button>
+                        </div>
                       </div>
-                      <div className="flex gap-2">
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          onClick={() => {
-                            setEditingSchoolYear(sy);
-                            setEditSchoolYearForm({
-                              school_year: sy.school_year || '',
-                              start_date: sy.start_date || '',
-                              end_date: sy.end_date || '',
-                              enrollment_start: sy.enrollment_start || '',
-                              enrollment_end: sy.enrollment_end || '',
-                              is_active: sy.is_active === 1
-                            });
-                            setEditSchoolYearOpen(true);
-                          }}
-                        >
-                          <Edit className="h-4 w-4 mr-1" />
-                          Edit
-                        </Button>
-                        <Button 
-                          size="sm" 
-                          variant="outline"
-                          className="text-red-600 hover:bg-red-50"
-                          onClick={async () => {
-                            try {
-                              await maintenanceService.deleteSchoolYear(sy.id);
-                              fetchDashboardData();
-                            } catch (err: any) {
-                              setError(err.message || 'Failed to delete school year');
-                            }
-                          }}
-                        >
-                          <Trash2 className="h-4 w-4 mr-1" />
-                          Delete
-                        </Button>
+
+                      {/* Semester Management */}
+                      <div className="mt-4 p-3 bg-slate-50 rounded border border-slate-200">
+                        <div className="flex items-center justify-between mb-2">
+                          <p className="text-sm font-medium">Semesters</p>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => {
+                              setSelectedSchoolYearForSemester(sy);
+                              // Load saved semesters from localStorage
+                              const semestersData = JSON.parse(localStorage.getItem('schoolYearSemesters') || '{}');
+                              const savedSemesters = semestersData[sy.id] || [];
+                              setActiveSemestersInSY(savedSemesters);
+                            }}
+                          >
+                            Manage
+                          </Button>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {(() => {
+                            const semestersData = JSON.parse(localStorage.getItem('schoolYearSemesters') || '{}');
+                            const savedSemesters = semestersData[sy.id] || [];
+                            return savedSemesters.length > 0 ? (
+                              savedSemesters.map((sem: string) => (
+                                <Badge key={sem} className="bg-blue-100 text-blue-700 border-0">
+                                  {sem} Semester
+                                </Badge>
+                              ))
+                            ) : (
+                              <p className="text-xs text-slate-500">No semesters configured</p>
+                            );
+                          })()}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -3490,11 +3570,26 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
               <div>
                 <Label>Course</Label>
-                <Input 
-                  className="mt-2"
-                  value={selectedStudent?.course || ''}
-                  onChange={(e) => setSelectedStudent({...selectedStudent, course: e.target.value})}
-                />
+                <Select 
+                  value={selectedStudent?.course || undefined}
+                  onValueChange={(value) => setSelectedStudent({...selectedStudent, course: value})}
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="Select a course" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {courses.map((course: any) => {
+                      const code = course.program_code || course.name || '';
+                      const name = course.program_name || course.name || code;
+                      const label = code && name && code !== name ? `${code} — ${name}` : (name || code);
+                      return (
+                        <SelectItem key={course.id || code} value={code}>
+                          {label}
+                        </SelectItem>
+                      );
+                    })}
+                  </SelectContent>
+                </Select>
               </div>
 
               <div>
@@ -3511,11 +3606,37 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
 
               <div>
                 <Label>Student Type</Label>
-                <Input 
-                  className="mt-2"
+                <Select 
                   value={selectedStudent?.studentType || ''}
-                  onChange={(e) => setSelectedStudent({...selectedStudent, studentType: e.target.value})}
-                />
+                  onValueChange={(value) => setSelectedStudent({...selectedStudent, studentType: value})}
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="Select student type" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {studentTypes.map((type) => (
+                      <SelectItem key={type} value={type}>
+                        {type}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>Class Section</Label>
+                <Select 
+                  value={selectedStudent?.section && selectedStudent.section !== 'N/A' ? selectedStudent.section : undefined}
+                  onValueChange={(value) => setSelectedStudent({...selectedStudent, section: value})}
+                >
+                  <SelectTrigger className="mt-2">
+                    <SelectValue placeholder="Select section" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">Section 1</SelectItem>
+                    <SelectItem value="2">Section 2</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="flex gap-2 justify-end border-t pt-4">
@@ -3527,8 +3648,8 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                   onClick={async () => {
                     try {
                       setLoadingSection('update-student-details');
-                      // Use the student's id for the update
-                      const studentId = selectedStudent?.id || selectedStudent?.student_id;
+                      // Use the numeric database ID for the update (studentId or dbId)
+                      const studentId = selectedStudent?.studentId || selectedStudent?.dbId;
                       if (!studentId) {
                         alert('Student ID not found');
                         return;
@@ -3541,10 +3662,14 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                         course: selectedStudent?.course,
                         year_level: parseInt(selectedStudent?.year) || 1,
                         student_type: selectedStudent?.studentType,
+                        section: selectedStudent?.section !== 'N/A' ? selectedStudent?.section : null,
                         username: selectedStudent?.id || selectedStudent?.student_id
                       });
                       alert('Student details updated successfully');
+                      // Clear selected student and close dialog
+                      setSelectedStudent(null);
                       setUpdateStudentOpen(false);
+                      // Refresh dashboard data to reflect changes throughout the system
                       await fetchDashboardData();
                     } catch (err: any) {
                       alert(err.message || 'Failed to update student details');
@@ -3820,6 +3945,87 @@ export default function AdminDashboard({ onLogout }: AdminDashboardProps) {
                   </>
                 ) : (
                   'Add School Year'
+                )}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Manage Semesters Dialog */}
+      <Dialog open={selectedSchoolYearForSemester !== null} onOpenChange={(open) => {
+        if (!open) setSelectedSchoolYearForSemester(null);
+      }}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Manage Semesters</DialogTitle>
+            <DialogDescription>
+              Select semesters for {selectedSchoolYearForSemester?.school_year}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-slate-600">
+              Choose which semesters are available for this school year:
+            </p>
+            <div className="space-y-2">
+              {semesters.map((sem) => (
+                <div key={sem} className="flex items-center gap-2">
+                  <Checkbox
+                    id={`sem-${sem}`}
+                    checked={activeSemestersInSY.includes(sem)}
+                    onCheckedChange={(checked) => {
+                      if (checked) {
+                        setActiveSemestersInSY([...activeSemestersInSY, sem]);
+                      } else {
+                        setActiveSemestersInSY(activeSemestersInSY.filter(s => s !== sem));
+                      }
+                    }}
+                  />
+                  <Label htmlFor={`sem-${sem}`} className="cursor-pointer font-normal">
+                    {sem} Semester
+                  </Label>
+                </div>
+              ))}
+            </div>
+            <div className="flex gap-2 justify-end pt-4 border-t">
+              <Button 
+                variant="outline" 
+                onClick={() => setSelectedSchoolYearForSemester(null)}
+              >
+                Cancel
+              </Button>
+              <Button 
+                className="bg-gradient-to-r from-blue-600 to-indigo-600"
+                onClick={async () => {
+                  try {
+                    setLoadingSection('configure-semesters');
+                    
+                    // Store semesters in localStorage keyed by school year ID
+                    const semestersData = JSON.parse(localStorage.getItem('schoolYearSemesters') || '{}');
+                    semestersData[selectedSchoolYearForSemester.id] = activeSemestersInSY;
+                    localStorage.setItem('schoolYearSemesters', JSON.stringify(semestersData));
+                    
+                    alert(`Semesters configured for ${selectedSchoolYearForSemester.school_year}: ${activeSemestersInSY.join(', ') || 'None'}`);
+                    
+                    // Close dialog and refresh to show updated semester info
+                    setSelectedSchoolYearForSemester(null);
+                    setActiveSemestersInSY([]);
+                    await fetchDashboardData();
+                  } catch (err: any) {
+                    alert(err.message || 'Failed to configure semesters');
+                  } finally {
+                    setLoadingSection(null);
+                  }
+                }}
+                disabled={loadingSection === 'configure-semesters'}
+              >
+                {loadingSection === 'configure-semesters' ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  'Save Semesters'
                 )}
               </Button>
             </div>

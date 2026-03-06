@@ -80,7 +80,8 @@ export const updateStudentProfile = async (req: AuthRequest, res: Response) => {
       gender,
       username,
       course,
-      year_level
+      year_level,
+      section
     } = req.body;
 
     // Update student info
@@ -96,9 +97,10 @@ export const updateStudentProfile = async (req: AuthRequest, res: Response) => {
         gender = ?,
         course = COALESCE(?, course),
         year_level = COALESCE(?, year_level),
+        section = COALESCE(?, section),
         updated_at = datetime('now')
       WHERE user_id = ?`,
-      [first_name, middle_name, last_name, suffix, contact_number, address, birth_date, gender, course || null, year_level || null, userId]
+      [first_name, middle_name, last_name, suffix, contact_number, address, birth_date, gender, course || null, year_level || null, section || null, userId]
     );
 
     // Update username if provided

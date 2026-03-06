@@ -91,6 +91,15 @@ class CashierService {
     }
   }
 
+  async addInstallmentPenalty(paymentId: number | string, penaltyAmount: number, reason?: string) {
+    try {
+      const res = await api.put(`/cashier/installment-payments/${paymentId}/penalty`, { penalty_amount: penaltyAmount, reason });
+      return res.data;
+    } catch (error) {
+      throw new Error(handleApiError(error));
+    }
+  }
+
   // Enrollment Review endpoints
   async getEnrollmentsForReview() {
     try {

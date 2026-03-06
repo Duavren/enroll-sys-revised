@@ -76,8 +76,10 @@ export default function DeanDashboard({ onLogout }: DeanDashboardProps) {
   const [pendingGrades, setPendingGrades] = useState<any[]>([]);
   const [selectedSection, setSelectedSection] = useState<string>('');
   const [selectedSubjectFilter, setSelectedSubjectFilter] = useState<string>('');
+
   const [reassignOpen, setReassignOpen] = useState(false);
-  const [reassignForm, setReassignForm] = useState({ teacherId: '', fromSubjectId: '', toSubjectId: '' });
+  const [reassignFaculty, setReassignFaculty] = useState<any>(null);
+  const [reassignSection, setReassignSection] = useState<string>('');
   const [gradesDialogOpen, setGradesDialogOpen] = useState(false);
   const [error, setError] = useState<string>('');
   const [addFacultyOpen, setAddFacultyOpen] = useState(false);
@@ -216,7 +218,9 @@ export default function DeanDashboard({ onLogout }: DeanDashboardProps) {
     specialization: '',
     email: '',
     contact_number: '',
-    status: 'Active'
+    status: 'Active',
+    assign_department: '',
+    assign_subject: ''
   });
 
   const [newProgramForm, setNewProgramForm] = useState({
@@ -475,22 +479,25 @@ export default function DeanDashboard({ onLogout }: DeanDashboardProps) {
     }
   };
 
-  const handleOpenReassign = (teacherId?: string) => {
-    setReassignForm({ teacherId: teacherId || '', fromSubjectId: '', toSubjectId: '' });
+  const handleOpenReassign = (faculty: any) => {
+    setReassignFaculty(faculty);
+    setReassignSection(faculty.assigned_section || 'none');
     setReassignOpen(true);
   };
 
-  const handleReassignTeacher = async () => {
+  const handleAssignSection = async () => {
+    if (!reassignFaculty) return;
     try {
-      setLoading(true);
-      await deanService.reassignTeacher(reassignForm);
+      await deanService.assignTeacherToSection(reassignFaculty.id, reassignSection);
+      setFacultyMembers(prev => prev.map(f =>
+        f.id === reassignFaculty.id
+          ? { ...f, assigned_section: reassignSection === 'none' ? null : reassignSection }
+          : f
+      ));
       setReassignOpen(false);
-      setReassignForm({ teacherId: '', fromSubjectId: '', toSubjectId: '' });
-      fetchData();
+      setReassignFaculty(null);
     } catch (err: any) {
-      setError(err.message || 'Failed to reassign teacher');
-    } finally {
-      setLoading(false);
+      setError(err.message || 'Failed to assign teacher to section');
     }
   };
 
@@ -729,12 +736,22 @@ export default function DeanDashboard({ onLogout }: DeanDashboardProps) {
                     <div className="flex items-center justify-between">
                       <div className="flex-1">
                         <h4 className="text-slate-900">{faculty.first_name} {faculty.last_name}</h4>
-                        <p className="text-sm text-slate-500">{faculty.faculty_id} • {faculty.department || 'N/A'}</p>
+                        <p className="text-sm text-slate-500">
+                          {faculty.faculty_id} • {faculty.department || 'N/A'}
+                          {faculty.assigned_section ? (
+                            <Badge variant="secondary" className="ml-2">Section {faculty.assigned_section}</Badge>
+                          ) : (
+                            <Badge variant="outline" className="ml-2 text-slate-400">No Section</Badge>
+                          )}
+                        </p>
                         {faculty.specialization && (
                           <p className="text-sm text-slate-600 mt-1">{faculty.specialization}</p>
                         )}
                       </div>
-                      <div className="flex gap-2">
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" variant="outline" onClick={() => handleOpenReassign(faculty)}>
+                          Reassign
+                        </Button>
                         <Button 
                           size="sm" 
                           variant="outline"
@@ -750,16 +767,15 @@ export default function DeanDashboard({ onLogout }: DeanDashboardProps) {
                               specialization: faculty.specialization || '',
                               email: faculty.email || '',
                               contact_number: faculty.contact_number || '',
-                              status: faculty.status
+                              status: faculty.status || 'Active',
+                              assign_department: faculty.assign_department || '',
+                              assign_subject: faculty.assign_subject || ''
                             });
                             setEditFacultyOpen(true);
                           }}
                         >
                           <Edit className="h-4 w-4 mr-1" />
                           Edit
-                        </Button>
-                        <Button size="sm" variant="ghost" onClick={() => handleOpenReassign(faculty.id)}>
-                          Reassign
                         </Button>
                       </div>
                     </div>
@@ -860,21 +876,12 @@ export default function DeanDashboard({ onLogout }: DeanDashboardProps) {
               <DialogDescription>Update faculty member information.</DialogDescription>
             </DialogHeader>
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-2">
-                  <Label>Faculty ID</Label>
-                  <Input
-                    value={editFacultyForm.faculty_id}
-                    onChange={(e) => setEditFacultyForm({ ...editFacultyForm, faculty_id: e.target.value })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>Department</Label>
-                  <Input
-                    value={editFacultyForm.department}
-                    onChange={(e) => setEditFacultyForm({ ...editFacultyForm, department: e.target.value })}
-                  />
-                </div>
+              <div className="space-y-2">
+                <Label>Faculty ID</Label>
+                <Input
+                  value={editFacultyForm.faculty_id}
+                  onChange={(e) => setEditFacultyForm({ ...editFacultyForm, faculty_id: e.target.value })}
+                />
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-2">
@@ -932,6 +939,42 @@ export default function DeanDashboard({ onLogout }: DeanDashboardProps) {
                   </SelectContent>
                 </Select>
               </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <Label>Assign to Department</Label>
+                  <Select
+                    value={editFacultyForm.assign_department}
+                    onValueChange={(value) => setEditFacultyForm({ ...editFacultyForm, assign_department: value, assign_subject: '' })}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a department" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="BSCS">Computer Science Department (BSCS)</SelectItem>
+                      <SelectItem value="BSIT">Information Technology Department (BSIT)</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-2">
+                  <Label>Assign to Subject</Label>
+                  <Select
+                    value={editFacultyForm.assign_subject}
+                    onValueChange={(value) => setEditFacultyForm({ ...editFacultyForm, assign_subject: value })}
+                    disabled={!editFacultyForm.assign_department}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder={editFacultyForm.assign_department ? "Select a subject" : "Select department first"} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {subjects.filter((subj: any) => subj.course === editFacultyForm.assign_department).map((subj: any) => (
+                        <SelectItem key={subj.id} value={subj.id}>
+                          {subj.subject_code} - {subj.subject_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </div>
               <div className="flex justify-end gap-2">
                 <Button variant="outline" onClick={() => setEditFacultyOpen(false)}>Cancel</Button>
                 <Button onClick={handleUpdateFaculty}>Update Faculty</Button>
@@ -957,6 +1000,36 @@ export default function DeanDashboard({ onLogout }: DeanDashboardProps) {
             </AlertDialogFooter>
           </AlertDialogContent>
         </AlertDialog>
+
+        {/* Reassign Section Dialog */}
+        <Dialog open={reassignOpen} onOpenChange={setReassignOpen}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Assign Section</DialogTitle>
+              <DialogDescription>
+                Assign <span className="font-semibold">{reassignFaculty?.first_name} {reassignFaculty?.last_name}</span> to a section.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-4">
+              <Label>Section</Label>
+              <Select value={reassignSection} onValueChange={setReassignSection}>
+                <SelectTrigger className="mt-1">
+                  <SelectValue placeholder="Choose a section" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Not Assigned</SelectItem>
+                  <SelectItem value="1">Section 1</SelectItem>
+                  <SelectItem value="2">Section 2</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="flex justify-end gap-2 mt-4">
+              <Button variant="outline" onClick={() => setReassignOpen(false)}>Cancel</Button>
+              <Button onClick={handleAssignSection}>Assign</Button>
+            </div>
+          </DialogContent>
+        </Dialog>
+
       </div>
     );
   };
@@ -1033,50 +1106,6 @@ export default function DeanDashboard({ onLogout }: DeanDashboardProps) {
         </Card>
 
         {/* Add Program Dialog */}
-        {/* Reassign Teacher Dialog */}
-        <Dialog open={reassignOpen} onOpenChange={setReassignOpen}>
-          <DialogContent className="max-w-md">
-            <DialogHeader>
-              <DialogTitle>Reassign Teacher</DialogTitle>
-              <DialogDescription>Reassign a teacher from one subject to another for workload balancing.</DialogDescription>
-            </DialogHeader>
-            <div className="space-y-3 mt-4">
-              <div>
-                <Label>Teacher</Label>
-                <Select value={reassignForm.teacherId} onValueChange={(v) => setReassignForm({ ...reassignForm, teacherId: v })}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select teacher" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {facultyMembers.map(f => (<SelectItem key={f.id} value={f.id}>{f.first_name} {f.last_name}</SelectItem>))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>From Subject</Label>
-                <Select value={reassignForm.fromSubjectId} onValueChange={(v) => setReassignForm({ ...reassignForm, fromSubjectId: v })}>
-                  <SelectTrigger><SelectValue placeholder="From subject" /></SelectTrigger>
-                  <SelectContent>
-                    {subjects.map(s => (<SelectItem key={s.id} value={s.id}>{s.subject_code} - {s.subject_name}</SelectItem>))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div>
-                <Label>To Subject</Label>
-                <Select value={reassignForm.toSubjectId} onValueChange={(v) => setReassignForm({ ...reassignForm, toSubjectId: v })}>
-                  <SelectTrigger><SelectValue placeholder="To subject" /></SelectTrigger>
-                  <SelectContent>
-                    {subjects.map(s => (<SelectItem key={s.id} value={s.id}>{s.subject_code} - {s.subject_name}</SelectItem>))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-            <div className="flex justify-end mt-4">
-              <Button variant="outline" onClick={() => setReassignOpen(false)}>Cancel</Button>
-              <Button className="ml-2" onClick={handleReassignTeacher}>Reassign</Button>
-            </div>
-          </DialogContent>
-        </Dialog>
 
         {/* Grades Review Dialog */}
         <Dialog open={gradesDialogOpen} onOpenChange={setGradesDialogOpen}>
@@ -1262,7 +1291,7 @@ export default function DeanDashboard({ onLogout }: DeanDashboardProps) {
                         <div className="flex items-start justify-between gap-3">
                           <div className="flex-1 min-w-0">
                             <p className="font-semibold text-slate-900">{enr.first_name} {enr.last_name}</p>
-                            <p className="text-sm text-slate-600">{enr.course || enr.program_name} • Year {enr.year_level} • {enr.semester} Sem</p>
+                            <p className="text-sm text-slate-600">{enr.course || enr.program_name} • Year {enr.year_level}{enr.section ? ` • Section ${enr.section}` : ''} • {enr.semester} Sem</p>
                             <p className="text-xs text-slate-400 mt-1">{enr.school_year} — Submitted {new Date(enr.created_at).toLocaleDateString()}</p>
                             {enr.scholarship_type && enr.scholarship_type !== 'None' && (
                               <span className="inline-flex items-center gap-1 mt-1 text-[11px] font-medium text-indigo-700 bg-indigo-50 px-2 py-0.5 rounded-full border border-indigo-200">
@@ -1335,7 +1364,7 @@ export default function DeanDashboard({ onLogout }: DeanDashboardProps) {
               <DialogTitle>Enrollment Review</DialogTitle>
               {selectedDeanEnrollment && (
                 <DialogDescription>
-                  {selectedDeanEnrollment.first_name} {selectedDeanEnrollment.last_name} — {selectedDeanEnrollment.course} Year {selectedDeanEnrollment.year_level} • {selectedDeanEnrollment.semester} Sem {selectedDeanEnrollment.school_year}
+                  {selectedDeanEnrollment.first_name} {selectedDeanEnrollment.last_name} — {selectedDeanEnrollment.course} Year {selectedDeanEnrollment.year_level}{selectedDeanEnrollment.section ? ` • Section ${selectedDeanEnrollment.section}` : ''} • {selectedDeanEnrollment.semester} Sem {selectedDeanEnrollment.school_year}
                 </DialogDescription>
               )}
             </DialogHeader>

@@ -16,7 +16,8 @@ import {
   Check,
   AlertCircle,
   Bell,
-  Loader2
+  Loader2,
+  QrCode
 } from 'lucide-react';
 import { enrollmentService } from '../services/enrollment.service';
 import { studentService } from '../services/student.service';
@@ -36,6 +37,7 @@ import {
   DialogDescription,
   DialogHeader,
   DialogTitle,
+  DialogFooter,
 } from './ui/dialog';
 import {
   Select,
@@ -84,6 +86,7 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
   const [semester, setSemester] = useState('1st Semester');
   const [installmentPaymentOpen, setInstallmentPaymentOpen] = useState(false);
   const [selectedInstallmentPeriod, setSelectedInstallmentPeriod] = useState<string | null>(null);
+  const [penaltyPaymentAmount, setPenaltyPaymentAmount] = useState<number | null>(null);
   const [profileForm, setProfileForm] = useState({
     first_name: '',
     middle_name: '',
@@ -93,7 +96,8 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
     address: '',
     birth_date: '',
     gender: '',
-    username: ''
+    username: '',
+    section: ''
   });
   const [passwordForm, setPasswordForm] = useState({
     newPassword: '',
@@ -281,6 +285,7 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
                 return {
                   period: periodName,
                   amount: existingPayment.amount,
+                  penalty_amount: existingPayment.penalty_amount || 0,
                   status: existingPayment.status,
                   id: existingPayment.id
                 };
@@ -289,6 +294,7 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
                 return {
                   period: periodName,
                   amount: monthlyAmount,
+                  penalty_amount: 0,
                   status: 'Not Started',
                   id: null
                 };
@@ -334,7 +340,8 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
           gender: student.gender || '',
           username: student.username || '',
           course: student.course || '',
-          year_level: student.year_level || undefined
+          year_level: student.year_level || undefined,
+          section: student.section || ''
         });
 
         if (student.student_type) {
@@ -425,8 +432,8 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
         try {
           const assessmentResp = await paymentsService.getAssessment(student.student_id.toString());
           assessmentPayload = assessmentResp?.data || assessmentResp;
-          const paymentsResp = await paymentsService.listPayments(student.student_id.toString());
-          paymentsList = paymentsResp?.data || paymentsResp || [];
+          const approvedResp = await paymentsService.getApprovedPayments(student.student_id.toString());
+          paymentsList = approvedResp?.data || approvedResp || [];
           setAssessmentData(assessmentPayload);
           setPaymentHistory(paymentsList);
         } catch (innerErr) {
@@ -458,7 +465,12 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
         }))
       );
 
-      rebuildNotifications(current?.status || 'none', assessmentPayload, paymentsList, current);
+      // Fetch actual notifications from database for all status changes
+      try {
+        await fetchNotifications();
+      } catch (notifErr) {
+        console.error('Failed to fetch notifications:', notifErr);
+      }
     } finally {
       setLoading(false);
     }
@@ -470,39 +482,15 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
         const resp = await studentService.listNotifications();
         const items = resp?.data || resp || [];
 
-        const notices = items.map((r: any) => {
-          const title = r.action || (r.meta && r.meta.type) || 'Activity';
-          const detail = r.description || r.message || (r.meta && JSON.stringify(r.meta)) || '';
-          const text = (title || '').toString().toLowerCase();
-          let action: string | undefined = undefined;
-          let actionType: string | undefined = undefined;
-          let enrollmentId: any = r.entity_id || (r.meta && r.meta.enrollment_id) || null;
-
-          if (text.includes('payment') || text.includes('transaction') || (r.entity_type === 'transaction')) {
-            action = 'Review payments';
-            actionType = 'payments';
-          } else if (text.includes('enroll') || r.entity_type === 'enrollment') {
-            action = 'Download form';
-            actionType = 'download';
-          } else if (text.includes('section') || detail.toLowerCase().includes('section') || r.entity_type === 'section') {
-            action = 'View schedule';
-            actionType = 'schedule';
-          } else if (text.includes('profile') || text.includes('update')) {
-            action = 'View profile';
-            actionType = 'profile';
-          }
-
-          return {
-            id: r.id,
-            title: title.toString(),
-            detail: detail.toString(),
-            ts: r.created_at || r.ts,
-            is_read: r.is_read,
-            action,
-            actionType,
-            enrollmentId
-          };
-        });
+        // Map notification data correctly from the notifications table
+        const notices = items.map((notif: any) => ({
+          id: notif.id,
+          title: notif.title,
+          message: notif.message,
+          type: notif.type,
+          created_at: notif.created_at,
+          is_read: notif.is_read
+        }));
 
         setNotifications(notices);
         setHasNewNotification(notices.some((n: any) => !n.is_read));
@@ -870,7 +858,8 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
     loadingAssessment, 
     onSubmit, 
     loading,
-    installmentPeriod
+    installmentPeriod,
+    overrideAmount
   }: { 
     enrollment: any; 
     onViewAssessment: () => void; 
@@ -878,12 +867,15 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
     onSubmit: (data: any) => void;
     loading: boolean;
     installmentPeriod?: string;
+    overrideAmount?: number;
   }) => {
     const [paymentType, setPaymentType] = useState('full'); // 'full' or 'partial'
     const [paymentMethod, setPaymentMethod] = useState('');
     const [referenceNumber, setReferenceNumber] = useState('');
     const [receiptFile, setReceiptFile] = useState<File | null>(null);
+    const [enteredPaymentAmount, setEnteredPaymentAmount] = useState('');
     const [uploading, setUploading] = useState(false);
+    const [showBankDetails, setShowBankDetails] = useState(false);
 
     // Calculate installment amounts
     const totalAmount = enrollment.total_amount || 0;
@@ -892,8 +884,9 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
 
     // If this is for a remaining installment period
     const isRemainingInstallment = !!installmentPeriod && installmentPeriod !== 'Down Payment';
-    const paymentAmount = isRemainingInstallment ? monthlyAmount : downPaymentAmount;
+    const paymentAmount = overrideAmount || (isRemainingInstallment ? monthlyAmount : downPaymentAmount);
     const paymentPeriod = installmentPeriod || 'Down Payment';
+    const isPenaltyPayment = !!overrideAmount;
 
     const handleSubmit = async () => {
       if (!paymentMethod) {
@@ -902,6 +895,15 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
       }
       if (!referenceNumber) {
         alert('Please enter reference number');
+        return;
+      }
+      if (!enteredPaymentAmount) {
+        alert('Please enter the amount paid');
+        return;
+      }
+      const amountValue = parseFloat(enteredPaymentAmount);
+      if (isNaN(amountValue) || amountValue <= 0) {
+        alert('Please enter a valid amount');
         return;
       }
       if (!window.confirm('Are you sure you want to submit this payment?')) return;
@@ -926,12 +928,13 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
             enrollmentId: enrollment.id,
             studentId: enrollment.student_id,
             amount: paymentAmount,
-            period: paymentPeriod,
+            amountPaid: amountValue,
+            period: isPenaltyPayment ? `${paymentPeriod} - Late Penalty Fee` : paymentPeriod,
             paymentMethod,
             referenceNumber,
             receiptPath
           });
-          alert(`${paymentPeriod} payment submitted for verification`);
+          alert(`${isPenaltyPayment ? `${paymentPeriod} late penalty fee` : paymentPeriod} payment submitted for verification`);
           window.location.reload();
         } else {
           // Otherwise, submit regular full payment
@@ -939,7 +942,7 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
             payment_method: paymentMethod,
             reference_number: referenceNumber,
             receipt_path: receiptPath,
-            amount: enrollment.total_amount
+            amount: amountValue
           });
         }
       } catch (error: any) {
@@ -957,9 +960,11 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
           </div>
           {isRemainingInstallment ? (
             <>
-              <h3 className="text-xl font-semibold mb-2">{paymentPeriod} Payment</h3>
+              <h3 className="text-xl font-semibold mb-2">
+                {isPenaltyPayment ? `Late Penalty Fee - ${paymentPeriod}` : `${paymentPeriod} Payment`}
+              </h3>
               <p className="text-slate-600 mb-4">
-                Amount due: ₱{paymentAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                {isPenaltyPayment ? 'Penalty fee' : 'Amount'} due: ₱{paymentAmount.toLocaleString('en-US', { minimumFractionDigits: 2 })}
               </p>
             </>
           ) : (
@@ -1023,6 +1028,13 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
           <div className="mb-4">
             <Button variant="outline" onClick={onViewAssessment} disabled={loadingAssessment}>
               {loadingAssessment ? <Loader2 className="h-4 w-4 animate-spin" /> : 'View Full Assessment'}
+            </Button>
+            <Button 
+              variant="outline" 
+              className="ml-2"
+              onClick={() => setShowBankDetails(true)}
+            >
+              View QR Code & Bank Details
             </Button>
           </div>
         </div>
@@ -1103,6 +1115,31 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
             </div>
           </div>
           <div>
+            <Label>Amount Paid *</Label>
+            <Input 
+              type="number" 
+              placeholder="Enter amount you are paying" 
+              value={enteredPaymentAmount}
+              onChange={(e) => setEnteredPaymentAmount(e.target.value)}
+              step="0.01"
+              min="0"
+            />
+            {enteredPaymentAmount && (
+              <div className="mt-2 p-3 bg-blue-50 rounded border border-blue-200">
+                <p className="text-sm font-medium text-blue-900">Balance Summary:</p>
+                <p className="text-sm text-blue-700 mt-1">
+                  {isPenaltyPayment ? 'Penalty Amount' : 'Total Amount'}: ₱{(isPenaltyPayment ? paymentAmount : totalAmount).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </p>
+                <p className="text-sm text-blue-700">
+                  Amount Paying: ₱{parseFloat(enteredPaymentAmount || '0').toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </p>
+                <p className="text-sm font-semibold text-blue-900 mt-1">
+                  Remaining Balance: ₱{Math.max((isPenaltyPayment ? paymentAmount : totalAmount) - parseFloat(enteredPaymentAmount || '0'), 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
+                </p>
+              </div>
+            )}
+          </div>
+          <div>
             <Label>Upload Proof of Payment *</Label>
             <Input 
               type="file" 
@@ -1114,7 +1151,7 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
           <Button 
             className="w-full bg-gradient-to-r from-blue-600 to-indigo-600"
             onClick={handleSubmit}
-            disabled={loading || uploading || !paymentMethod || !referenceNumber}
+            disabled={loading || uploading || !paymentMethod || !referenceNumber || !enteredPaymentAmount}
           >
             {(loading || uploading) ? (
               <>
@@ -1140,25 +1177,145 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
               <h4 className="font-semibold text-orange-900 mb-4">Your Installment Payment Schedule</h4>
               <div className="space-y-3">
                 {installmentSchedule.map((payment: any, index: number) => (
-                  <div key={payment.id || index} className="flex items-center justify-between bg-white p-3 rounded border border-orange-100">
-                    <div className="flex-1">
-                      <p className="font-medium text-sm">{payment.period}</p>
-                      <p className="text-xs text-slate-600">Amount: ₱{(payment.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                  <React.Fragment key={payment.id || index}>
+                    <div className="flex items-center justify-between bg-white p-3 rounded border border-orange-100">
+                      <div className="flex-1">
+                        <p className="font-medium text-sm">{payment.period}</p>
+                        <p className="text-xs text-slate-600">Amount: ₱{(payment.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      </div>
+                      <Badge className={`
+                        ${payment.status === 'Approved' ? 'bg-green-100 text-green-800' : 
+                          payment.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' : 
+                          payment.status === 'Rejected' ? 'bg-red-100 text-red-800' : 
+                          'bg-slate-100 text-slate-800'}
+                      `}>
+                        {payment.status}
+                      </Badge>
                     </div>
-                    <Badge className={`
-                      ${payment.status === 'Approved' ? 'bg-green-100 text-green-800' : 
-                        payment.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' : 
-                        payment.status === 'Rejected' ? 'bg-red-100 text-red-800' : 
-                        'bg-slate-100 text-slate-800'}
-                    `}>
-                      {payment.status}
-                    </Badge>
-                  </div>
+                    {(payment.penalty_amount || 0) > 0 && (
+                      <div className="flex items-center justify-between bg-red-50 p-3 rounded border border-red-200 ml-4">
+                        <div className="flex-1">
+                          <p className="font-medium text-sm text-red-800">Late Payment Penalty</p>
+                          <p className="text-xs text-red-600">₱{(payment.penalty_amount).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                        </div>
+                      </div>
+                    )}
+                  </React.Fragment>
                 ))}
               </div>
             </Card>
           </div>
         )}
+
+        {/* Bank Details & QR Code Modal */}
+        <Dialog open={showBankDetails} onOpenChange={setShowBankDetails}>
+          <DialogContent className="max-w-md sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>Payment Information</DialogTitle>
+              <DialogDescription>Bank Account & QR Code for Transfer</DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-6 py-4">
+              {/* QR Code Section */}
+              <div className="flex flex-col items-center">
+                <div className="bg-slate-100 p-4 rounded-lg mb-2">
+                  <div className="w-40 h-40 bg-white flex items-center justify-center border-2 border-dashed border-slate-300 rounded">
+                    <div className="text-center">
+                      <QrCode className="h-16 w-16 text-slate-400 mx-auto mb-2" />
+                      <p className="text-xs text-slate-500">QR Code</p>
+                    </div>
+                  </div>
+                </div>
+                <p className="text-xs text-slate-500">Scan to transfer via GCash/Maya</p>
+              </div>
+
+              {/* Bank Account Details */}
+              <div className="space-y-4">
+                <div className="bg-blue-50 p-4 rounded-lg border border-blue-200">
+                  <p className="text-xs font-semibold text-blue-700 mb-3">Bank Transfer Details</p>
+                  
+                  <div className="space-y-3">
+                    <div>
+                      <p className="text-xs text-slate-600 font-medium">Bank Name</p>
+                      <div className="flex items-center justify-between mt-1">
+                        <p className="text-sm text-slate-900 font-semibold">Banco ng Pilipinas (BPI)</p>
+                        <button 
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                          onClick={() => {
+                            navigator.clipboard.writeText('Banco ng Pilipinas (BPI)');
+                            alert('Copied to clipboard');
+                          }}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs text-slate-600 font-medium">Account Number</p>
+                      <div className="flex items-center justify-between mt-1">
+                        <p className="text-sm text-slate-900 font-mono font-semibold">1234-5678-9012-3456</p>
+                        <button 
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                          onClick={() => {
+                            navigator.clipboard.writeText('1234-5678-9012-3456');
+                            alert('Copied to clipboard');
+                          }}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs text-slate-600 font-medium">Account Holder</p>
+                      <div className="flex items-center justify-between mt-1">
+                        <p className="text-sm text-slate-900 font-semibold">Infomatics College Northgate</p>
+                        <button 
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                          onClick={() => {
+                            navigator.clipboard.writeText('Infomatics College Northgate');
+                            alert('Copied to clipboard');
+                          }}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <p className="text-xs text-slate-600 font-medium">Branch Code</p>
+                      <div className="flex items-center justify-between mt-1">
+                        <p className="text-sm text-slate-900 font-mono font-semibold">010</p>
+                        <button 
+                          className="text-xs text-blue-600 hover:text-blue-800"
+                          onClick={() => {
+                            navigator.clipboard.writeText('010');
+                            alert('Copied to clipboard');
+                          }}
+                        >
+                          Copy
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="bg-amber-50 p-3 rounded-lg border border-amber-200">
+                  <p className="text-xs text-amber-900">
+                    <span className="font-semibold">Note:</span> After transferring, upload your receipt/proof of payment below.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setShowBankDetails(false)}>
+                Close
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </Card>
     );
   };
@@ -1190,16 +1347,16 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
             <Clock className="h-4 w-4 text-blue-600" />
             <AlertTitle className="text-blue-900">Payment Verification</AlertTitle>
             <AlertDescription className="text-blue-700">
-              Your payment is being verified by the registrar. You will be notified once verified.
+              Your payment is being verified by the cashier. You will be notified once verified.
             </AlertDescription>
           </Alert>
         )}
 
         {enrollmentStatus === 'For Payment' && (
-          <Alert className="bg-purple-50 border-purple-200">
-            <Clock className="h-4 w-4 text-purple-600" />
-            <AlertTitle className="text-purple-900">Proceed to Payment</AlertTitle>
-            <AlertDescription className="text-purple-700">
+          <Alert className="bg-red-50 border-red-200">
+            <Clock className="h-4 w-4 text-red-600" />
+            <AlertTitle className="text-red-900">Proceed to Payment</AlertTitle>
+            <AlertDescription className="text-red-700">
               Your subjects have been approved. Please proceed to payment.
             </AlertDescription>
           </Alert>
@@ -1271,37 +1428,74 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
             <h3 className="text-lg font-semibold text-blue-900 mb-4">Remaining Installment Payments</h3>
             <p className="text-sm text-slate-600 mb-4">You have paid the down payment. Below is your remaining balance to pay:</p>
             <div className="space-y-4">
-              {installmentSchedule.map((payment: any, idx: number) => (
-                <div key={`${payment.period}-${idx}`} className="bg-white rounded-lg p-4 flex items-center justify-between">
-                  <div className="flex-1">
-                    <p className="font-semibold text-slate-900">{payment.period} Payment</p>
-                    <p className="text-sm text-slate-600">Amount Due: ₱{(payment.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
-                    <Badge className={`mt-2 ${
-                      payment.status === 'Approved' ? 'bg-green-100 text-green-800' :
-                      payment.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
-                      payment.status === 'Rejected' ? 'bg-red-100 text-red-800' :
-                      'bg-slate-100 text-slate-800'
-                    }`}>
-                      {payment.status}
-                    </Badge>
-                    {payment.status === 'Rejected' && (
-                      <p className="text-xs text-red-600 mt-2">Please resubmit your payment</p>
+              {installmentSchedule.map((payment: any, idx: number) => {
+                const periodOffset: Record<string, number> = { 'Prelim Period': 1, 'Midterm Period': 2, 'Finals Period': 3 };
+                const enrollDate = new Date(currentEnrollment?.enrollment_date || currentEnrollment?.created_at);
+                const dueDate = new Date(enrollDate);
+                dueDate.setMonth(dueDate.getMonth() + (periodOffset[payment.period] ?? (idx + 1)));
+                const isOverdue = new Date() > dueDate && payment.status !== 'Approved';
+                // Check if any previous period has an unpaid penalty (blocks paying next periods)
+                const hasUnpaidPriorPenalty = installmentSchedule.slice(0, idx).some((prev: any) => (prev.penalty_amount || 0) > 0);
+                const canPayPeriod = !hasUnpaidPriorPenalty && (payment.status === 'Not Started' || payment.status === 'Rejected');
+                return (
+                <React.Fragment key={`${payment.period}-${idx}`}>
+                  <div className="bg-white rounded-lg p-4 flex items-center justify-between">
+                    <div className="flex-1">
+                      <p className="font-semibold text-slate-900">{payment.period} Payment</p>
+                      <p className="text-sm text-slate-600">Amount Due: ₱{(payment.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      <p className={`text-xs mt-1 ${isOverdue ? 'text-red-600 font-medium' : 'text-slate-500'}`}>Due Date: {dueDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}{isOverdue ? ' (Overdue)' : ''}</p>
+                      <Badge className={`mt-2 ${
+                        payment.status === 'Approved' ? 'bg-green-100 text-green-800' :
+                        payment.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
+                        payment.status === 'Rejected' ? 'bg-red-100 text-red-800' :
+                        'bg-slate-100 text-slate-800'
+                      }`}>
+                        {payment.status}
+                      </Badge>
+                      {payment.status === 'Rejected' && (
+                        <p className="text-xs text-red-600 mt-2">Please resubmit your payment</p>
+                      )}
+                      {hasUnpaidPriorPenalty && (payment.status === 'Not Started' || payment.status === 'Rejected') && (
+                        <p className="text-xs text-amber-600 mt-2">Pay outstanding penalty fees first before paying this period.</p>
+                      )}
+                    </div>
+                    {canPayPeriod && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setPenaltyPaymentAmount(null);
+                          setSelectedInstallmentPeriod(payment.period);
+                          setInstallmentPaymentOpen(true);
+                        }}
+                      >
+                        Pay Now
+                      </Button>
                     )}
                   </div>
-                  {(payment.status === 'Not Started' || payment.status === 'Rejected') && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setSelectedInstallmentPeriod(payment.period);
-                        setInstallmentPaymentOpen(true);
-                      }}
-                    >
-                      Pay Now
-                    </Button>
-                  )}
-                </div>
-              ))}
+                  <div className={`rounded-lg p-4 flex items-center justify-between ml-4 ${(payment.penalty_amount || 0) > 0 ? 'bg-red-50 border border-red-200' : 'bg-slate-50 border border-slate-200'}`}>
+                    <div className="flex-1">
+                      <p className={`font-semibold ${(payment.penalty_amount || 0) > 0 ? 'text-red-800' : 'text-slate-600'}`}>Late Penalty Fee</p>
+                      <p className={`text-sm font-semibold ${(payment.penalty_amount || 0) > 0 ? 'text-red-700' : 'text-slate-500'}`}>₱{(payment.penalty_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                    </div>
+                    {(payment.penalty_amount || 0) > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="!text-red-700 !border-red-300 hover:!bg-red-100"
+                        onClick={() => {
+                          setPenaltyPaymentAmount(payment.penalty_amount);
+                          setSelectedInstallmentPeriod(payment.period);
+                          setInstallmentPaymentOpen(true);
+                        }}
+                      >
+                        Pay Now
+                      </Button>
+                    )}
+                  </div>
+                </React.Fragment>
+                );
+              })}
             </div>
           </Card>
         )}
@@ -1311,7 +1505,7 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
             <p className="text-xs text-slate-500 mb-1">Enrollment Status</p>
             <p className="text-lg font-semibold text-slate-900">{enrollmentStatus || 'Not started'}</p>
             {currentEnrollment?.school_year && (
-              <p className="text-sm text-slate-600">{currentEnrollment.school_year} • {currentEnrollment.semester}</p>
+              <p className="text-sm text-slate-600">{currentEnrollment.school_year} • {currentEnrollment.semester}{studentProfile?.section ? ` • Section ${studentProfile.section}` : ''}</p>
             )}
           </Card>
           <Card className="p-4 shadow-sm">
@@ -1319,7 +1513,7 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
             <p className="text-lg font-semibold text-slate-900">
               ₱{(assessmentData?.total_amount || assessmentData?.total || currentEnrollment?.total_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}
             </p>
-            <p className="text-sm text-slate-600">Paid: ₱{paymentHistory.reduce((sum: number, p: any) => sum + (p.amount || 0), 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+            <p className="text-sm text-slate-600">Paid: ₱{paymentHistory.reduce((sum: number, p: any) => sum + (p.amount_paid || p.amount || 0), 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
           </Card>
           <Card className="p-4 shadow-sm">
             <p className="text-xs text-slate-500 mb-1">Grades Status</p>
@@ -1388,7 +1582,8 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
       studentProfile?.birth_date,
       studentProfile?.gender,
       studentProfile?.course,
-      studentProfile?.year_level
+      studentProfile?.year_level,
+      studentProfile?.section
     ];
     
     const isProfileIncomplete = requiredProfileFields.some(field => !field || field === '');
@@ -1413,6 +1608,7 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
               {!studentProfile?.gender && <li>• Gender</li>}
               {!studentProfile?.course && <li>• Course</li>}
               {!studentProfile?.year_level && <li>• Year Level</li>}
+              {!studentProfile?.section && <li>• Class Section</li>}
             </ul>
           </div>
           <Button 
@@ -2091,37 +2287,74 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
             <h3 className="text-lg font-semibold text-blue-900 mb-4">Remaining Installment Payments</h3>
             <p className="text-sm text-slate-600 mb-4">You have paid the down payment. Below is your remaining balance to pay:</p>
             <div className="space-y-4">
-              {installmentSchedule.map((payment: any, idx: number) => (
-                <div key={`${payment.period}-${idx}`} className="bg-white rounded-lg p-4 flex items-center justify-between">
-                  <div className="flex-1">
-                    <p className="font-semibold text-slate-900">{payment.period} Payment</p>
-                    <p className="text-sm text-slate-600">Amount Due: ₱{(payment.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
-                    <Badge className={`mt-2 ${
-                      payment.status === 'Approved' ? 'bg-green-100 text-green-800' :
-                      payment.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
-                      payment.status === 'Rejected' ? 'bg-red-100 text-red-800' :
-                      'bg-slate-100 text-slate-800'
-                    }`}>
-                      {payment.status}
-                    </Badge>
-                    {payment.status === 'Rejected' && (
-                      <p className="text-xs text-red-600 mt-2">Please resubmit your payment</p>
+              {installmentSchedule.map((payment: any, idx: number) => {
+                const periodOffset: Record<string, number> = { 'Prelim Period': 1, 'Midterm Period': 2, 'Finals Period': 3 };
+                const enrollDate = new Date(currentEnrollment?.enrollment_date || currentEnrollment?.created_at);
+                const dueDate = new Date(enrollDate);
+                dueDate.setMonth(dueDate.getMonth() + (periodOffset[payment.period] ?? (idx + 1)));
+                const isOverdue = new Date() > dueDate && payment.status !== 'Approved';
+                // Check if any previous period has an unpaid penalty (blocks paying next periods)
+                const hasUnpaidPriorPenalty = installmentSchedule.slice(0, idx).some((prev: any) => (prev.penalty_amount || 0) > 0);
+                const canPayPeriod = !hasUnpaidPriorPenalty && (payment.status === 'Not Started' || payment.status === 'Rejected');
+                return (
+                <React.Fragment key={`${payment.period}-${idx}`}>
+                  <div className="bg-white rounded-lg p-4 flex items-center justify-between">
+                    <div className="flex-1">
+                      <p className="font-semibold text-slate-900">{payment.period} Payment</p>
+                      <p className="text-sm text-slate-600">Amount Due: ₱{(payment.amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                      <p className={`text-xs mt-1 ${isOverdue ? 'text-red-600 font-medium' : 'text-slate-500'}`}>Due Date: {dueDate.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}{isOverdue ? ' (Overdue)' : ''}</p>
+                      <Badge className={`mt-2 ${
+                        payment.status === 'Approved' ? 'bg-green-100 text-green-800' :
+                        payment.status === 'Pending' ? 'bg-yellow-100 text-yellow-800' :
+                        payment.status === 'Rejected' ? 'bg-red-100 text-red-800' :
+                        'bg-slate-100 text-slate-800'
+                      }`}>
+                        {payment.status}
+                      </Badge>
+                      {payment.status === 'Rejected' && (
+                        <p className="text-xs text-red-600 mt-2">Please resubmit your payment</p>
+                      )}
+                      {hasUnpaidPriorPenalty && (payment.status === 'Not Started' || payment.status === 'Rejected') && (
+                        <p className="text-xs text-amber-600 mt-2">Pay outstanding penalty fees first before paying this period.</p>
+                      )}
+                    </div>
+                    {canPayPeriod && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setPenaltyPaymentAmount(null);
+                          setSelectedInstallmentPeriod(payment.period);
+                          setInstallmentPaymentOpen(true);
+                        }}
+                      >
+                        Pay Now
+                      </Button>
                     )}
                   </div>
-                  {(payment.status === 'Not Started' || payment.status === 'Rejected') && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => {
-                        setSelectedInstallmentPeriod(payment.period);
-                        setInstallmentPaymentOpen(true);
-                      }}
-                    >
-                      Pay Now
-                    </Button>
-                  )}
-                </div>
-              ))}
+                  <div className={`rounded-lg p-4 flex items-center justify-between ml-4 ${(payment.penalty_amount || 0) > 0 ? 'bg-red-50 border border-red-200' : 'bg-slate-50 border border-slate-200'}`}>
+                    <div className="flex-1">
+                      <p className={`font-semibold ${(payment.penalty_amount || 0) > 0 ? 'text-red-800' : 'text-slate-600'}`}>Late Penalty Fee</p>
+                      <p className={`text-sm font-semibold ${(payment.penalty_amount || 0) > 0 ? 'text-red-700' : 'text-slate-500'}`}>₱{(payment.penalty_amount || 0).toLocaleString('en-US', { minimumFractionDigits: 2 })}</p>
+                    </div>
+                    {(payment.penalty_amount || 0) > 0 && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="!text-red-700 !border-red-300 hover:!bg-red-100"
+                        onClick={() => {
+                          setPenaltyPaymentAmount(payment.penalty_amount);
+                          setSelectedInstallmentPeriod(payment.period);
+                          setInstallmentPaymentOpen(true);
+                        }}
+                      >
+                        Pay Now
+                      </Button>
+                    )}
+                  </div>
+                </React.Fragment>
+                );
+              })}
             </div>
           </Card>
         )}
@@ -2325,6 +2558,21 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
                     </SelectContent>
                   </Select>
                 </div>
+                <div>
+                  <Label htmlFor="profile-section">Class Section</Label>
+                  <Select
+                    value={profileForm.section || undefined}
+                    onValueChange={(value) => setProfileForm({ ...profileForm, section: value })}
+                  >
+                    <SelectTrigger id="profile-section" className="mt-2">
+                      <SelectValue placeholder="Select section" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="1">Section 1</SelectItem>
+                      <SelectItem value="2">Section 2</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
             </div>
 
@@ -2358,7 +2606,8 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
                     gender: studentProfile.gender || '',
                     username: studentProfile.username || '',
                     course: studentProfile.course || '',
-                    year_level: studentProfile.year_level || undefined
+                    year_level: studentProfile.year_level || undefined,
+                    section: studentProfile.section || ''
                   });
                 }}
               >
@@ -2523,18 +2772,19 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
                 <p className="text-sm text-slate-600">Welcome back to your learning portal</p>
               </div>
               <div className="flex items-center gap-3">
-                {hasNewNotification && (enrollmentStatus === 'For Subject Selection' || enrollmentStatus === 'For Payment' || enrollmentStatus === 'Enrolled') && (
-                  <button 
-                    onClick={handleViewNotification}
-                    className="relative p-2 hover:bg-slate-100 rounded-lg transition-colors"
-                  >
-                    <Bell className="h-5 w-5 text-slate-600" />
+                <button 
+                  onClick={handleViewNotification}
+                  className="relative p-2 hover:bg-slate-100 rounded-lg transition-colors"
+                  title="Notifications"
+                >
+                  <Bell className="h-5 w-5 text-slate-600" />
+                  {hasNewNotification && (
                     <span className="absolute top-1 right-1 w-2 h-2 bg-red-500 rounded-full"></span>
-                  </button>
-                )}
+                  )}
+                </button>
                 <div className="text-right">
                   <p className="text-xs text-slate-600">Student ID: {studentProfile?.student_id || 'N/A'}</p>
-                  <p className="text-xs text-slate-500">{(studentProfile?.course ? `${studentProfile.course} - ` : '') + (studentProfile?.year_level ? `${studentProfile.year_level}${getOrdinalSuffix(studentProfile.year_level)} Year` : '')}</p>
+                  <p className="text-xs text-slate-500">{(studentProfile?.course ? `${studentProfile.course} - ` : '') + (studentProfile?.year_level ? `${studentProfile.year_level}${getOrdinalSuffix(studentProfile.year_level)} Year` : '')}{studentProfile?.section ? ` • Section ${studentProfile.section}` : ''}</p>
                 </div>
                 <div className="w-10 h-10 rounded-full bg-gradient-to-br from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg">
                   <User className="h-5 w-5 text-white" />
@@ -2574,42 +2824,37 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
             <Dialog open={showNotification} onOpenChange={setShowNotification}>
               <DialogContent className="max-w-md">
                 <DialogHeader>
-                  <DialogTitle>Notifications</DialogTitle>
+                  <DialogTitle>Notifications ({notifications.length})</DialogTitle>
                   <DialogDescription>Recent updates about your enrollment and payments.</DialogDescription>
                 </DialogHeader>
-                <div className="mt-4 space-y-3">
-                  {notifications.length === 0 && (
-                    <p className="text-sm text-slate-500">No new notifications.</p>
+                <div className="space-y-3 overflow-y-auto" style={{ maxHeight: '60vh' }}>
+                  {notificationsLoading && (
+                    <p className="text-sm text-slate-500 text-center">Loading notifications...</p>
                   )}
-                  {notifications.map((notice, idx) => (
-                    <div key={idx} className="p-3 border rounded-lg">
+                  {!notificationsLoading && notifications.length === 0 && (
+                    <p className="text-sm text-slate-500 text-center">No notifications yet.</p>
+                  )}
+                  {!notificationsLoading && notifications.map((notice: any, idx: number) => (
+                    <div key={notice.id || idx} className={`p-3 border rounded-lg ${!notice.is_read ? 'bg-blue-50 border-blue-200' : 'bg-slate-50'}`}>
                       <div className="flex items-start justify-between">
-                        <div>
-                          <p className="font-medium">{notice.title}</p>
-                          <p className="text-sm text-slate-600">{notice.detail}</p>
-                        </div>
-                        {notice.action && (
-                          <div className="text-right">
-                            <Button
-                              size="sm"
-                              variant={notice.actionType === 'download' ? 'outline' : 'default'}
-                              onClick={() => {
-                                if (notice.actionType === 'payments') {
-                                  openPaymentsModal();
-                                } else if (notice.actionType === 'download') {
-                                  handleDownloadEnrollmentForm(notice.enrollmentId);
-                                } else if (notice.actionType === 'schedule') {
-                                  setActiveSection('My Schedule');
-                                } else if (notice.actionType === 'profile') {
-                                  setActiveSection('My Profile');
-                                }
-                                setShowNotification(false);
-                              }}
-                            >
-                              {notice.action}
-                            </Button>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2 mb-1">
+                            <p className="font-semibold text-sm">{notice.title}</p>
+                            {!notice.is_read && <span className="w-2 h-2 bg-blue-500 rounded-full"></span>}
                           </div>
-                        )}
+                          <p className="text-sm text-slate-600">{notice.message}</p>
+                          <p className="text-xs text-slate-500 mt-1">
+                            {notice.created_at ? new Date(notice.created_at).toLocaleString() : 'Just now'}
+                          </p>
+                        </div>
+                        <div className={`px-2 py-1 rounded text-xs font-medium whitespace-nowrap ${
+                          notice.type === 'success' ? 'bg-green-100 text-green-700' :
+                          notice.type === 'warning' ? 'bg-orange-100 text-orange-700' :
+                          notice.type === 'error' ? 'bg-red-100 text-red-700' :
+                          'bg-blue-100 text-blue-700'
+                        }`}>
+                          {notice.type}
+                        </div>
                       </div>
                     </div>
                   ))}
@@ -2662,11 +2907,21 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
             </Dialog>
 
             {/* Installment Payment Modal */}
-            <Dialog open={installmentPaymentOpen} onOpenChange={setInstallmentPaymentOpen}>
+            <Dialog open={installmentPaymentOpen} onOpenChange={(open) => {
+              setInstallmentPaymentOpen(open);
+              if (!open) {
+                setPenaltyPaymentAmount(null);
+                setSelectedInstallmentPeriod(null);
+              }
+            }}>
               <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
                 <DialogHeader>
-                  <DialogTitle>Pay Installment</DialogTitle>
-                  <DialogDescription>Submit your payment for the {selectedInstallmentPeriod} period</DialogDescription>
+                  <DialogTitle>{penaltyPaymentAmount ? 'Pay Late Penalty Fee' : 'Pay Installment'}</DialogTitle>
+                  <DialogDescription>
+                    {penaltyPaymentAmount 
+                      ? `Submit your late penalty fee payment for the ${selectedInstallmentPeriod} period`
+                      : `Submit your payment for the ${selectedInstallmentPeriod} period`}
+                  </DialogDescription>
                 </DialogHeader>
                 {currentEnrollment && (
                   <PaymentForm
@@ -2693,6 +2948,7 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
                             return {
                               period: periodName,
                               amount: existingPayment.amount,
+                              penalty_amount: existingPayment.penalty_amount || 0,
                               status: existingPayment.status,
                               id: existingPayment.id
                             };
@@ -2700,6 +2956,7 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
                             return {
                               period: periodName,
                               amount: monthlyAmount,
+                              penalty_amount: 0,
                               status: 'Not Started',
                               id: null
                             };
@@ -2711,9 +2968,11 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
                       
                       setInstallmentPaymentOpen(false);
                       setSelectedInstallmentPeriod(null);
+                      setPenaltyPaymentAmount(null);
                     }}
                     loading={loading}
                     installmentPeriod={selectedInstallmentPeriod || undefined}
+                    overrideAmount={penaltyPaymentAmount || undefined}
                   />
                 )}
               </DialogContent>
@@ -2748,6 +3007,12 @@ export default function StudentDashboard({ onLogout }: StudentDashboardProps) {
                         <p className="text-xs text-slate-500 font-semibold uppercase">Year Level</p>
                         <p className="text-sm font-semibold text-slate-900">{studentProfile?.year_level ? `${studentProfile.year_level}${studentProfile.year_level === 1 ? 'st' : studentProfile.year_level === 2 ? 'nd' : studentProfile.year_level === 3 ? 'rd' : 'th'} Year` : 'N/A'}</p>
                       </div>
+                      {studentProfile?.section && (
+                        <div>
+                          <p className="text-xs text-slate-500 font-semibold uppercase">Section</p>
+                          <p className="text-sm font-semibold text-slate-900">{studentProfile.section}</p>
+                        </div>
+                      )}
                     </div>
                   </div>
                   {/* Scholarship Info */}

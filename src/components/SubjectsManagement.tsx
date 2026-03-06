@@ -6,10 +6,12 @@ import { Label } from './ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Loader2, Plus, AlertCircle, Edit, Trash2 } from 'lucide-react';
 import { maintenanceService } from '../services/maintenance.service';
+import { facultyService } from '../services/faculty.service';
 
 export default function SubjectsManagement() {
   const [loading, setLoading] = useState(true);
   const [subjects, setSubjects] = useState<any[]>([]);
+  const [faculty, setFaculty] = useState<any[]>([]);
   const [subjectType, setSubjectType] = useState<'College' | 'SHS'>('College');
   const [error, setError] = useState('');
   const [addOpen, setAddOpen] = useState(false);
@@ -35,7 +37,21 @@ export default function SubjectsManagement() {
     }
   };
 
-  useEffect(() => { load(); }, [subjectType]);
+  const loadFaculty = async () => {
+    try {
+      const resp = await facultyService.getAllFaculty();
+      if (resp.data) {
+        setFaculty(resp.data);
+      }
+    } catch (err: any) {
+      console.error('Failed to load faculty:', err);
+    }
+  };
+
+  useEffect(() => { 
+    load(); 
+    loadFaculty();
+  }, [subjectType]);
 
   const handleCreate = async () => {
     try {
@@ -284,7 +300,18 @@ export default function SubjectsManagement() {
                 </div>
                 <div>
                   <Label>Instructor</Label>
-                  <Input value={scheduleForm.instructor} onChange={(e: any) => setScheduleForm({ ...scheduleForm, instructor: e.target.value })} />
+                  <Select value={scheduleForm.instructor} onValueChange={(value) => setScheduleForm({ ...scheduleForm, instructor: value })}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select an instructor" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {faculty.map((fac: any) => (
+                        <SelectItem key={fac.id} value={`${fac.first_name} ${fac.last_name}`}>
+                          {fac.first_name} {fac.last_name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div>
                   <Label>Capacity</Label>
